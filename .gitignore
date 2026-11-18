@@ -1,0 +1,12 @@
+.pio/
+.pio-core/
+.vscode/
+__pycache__/
+include/DeviceConfig.h
+platformio.local.ini
+build-logs/
+*.bin
+*.elf
+.dependency-paths.json
+compile_commands.json
+.local/
