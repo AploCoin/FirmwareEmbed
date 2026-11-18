@@ -87,12 +87,3 @@ bool BoardRuntime::synchronizeTime(const char* primary, const char* fallback) {
     }
     return time(nullptr) >= 1700000000;
 }
-
-void BoardRuntime::reportMemory(const char* stage) {
-    Serial.print(F("Heap / "));
-    Serial.print(stage);
-    Serial.print(F(": free="));
-    Serial.print(ESP.getFreeHeap());
-    Serial.print(F(", largest="));
-    Serial.println(ESP.getMaxAllocHeap());
-}

@@ -1,40 +1,92 @@
 #include <Arduino.h>
-#include <SessionKeys.h>
+#include <MiningEmbed.h>
+#include <Web3.h>
 #include "BoardRuntime.h"
-#include "DeviceSetup.h"
 #include "FirmwareConfig.h"
-#include "MiningApplication.h"
-#include "SessionProvisioner.h"
+
+#if __has_include("AploTrustProfile.h")
+#include "AploTrustProfile.h"
+#define RPC_PRIMARY APLO_TRUST_PRIMARY_URL
+#define RPC_FALLBACK APLO_TRUST_FALLBACK_URL
+#define RPC_PRIMARY_CA APLO_TRUST_PRIMARY_CA
+#define RPC_FALLBACK_CA APLO_TRUST_FALLBACK_CA
+#else
+#define RPC_PRIMARY APLO_RPC_PRIMARY
+#define RPC_FALLBACK APLO_RPC_FALLBACK
+#define RPC_PRIMARY_CA APLO_RPC_PRIMARY_CA
+#define RPC_FALLBACK_CA APLO_RPC_FALLBACK_CA
+#endif
 
 namespace {
-// These outlive the application's borrowed transport and signing references.
+constexpr unsigned long wifiTimeoutMs = 45000;
 aplo::SessionKey sessionKey;
-bool ready = false;
+miningembed::MiningEmbed* miner = nullptr;
+
+void reportShare(const miningembed::Submission& share, bool polling) {
+    using miningembed::SubmissionState;
+    const __FlashStringHelper* message = nullptr;
+    if (share.state == SubmissionState::Confirmed) {
+        message = F("Receipt status=1, confirmed: ");
+    } else if (share.state == SubmissionState::Reverted) {
+        message = F("Receipt status=0, reverted: ");
+    } else if (!polling && share.state == SubmissionState::Broadcast) {
+        message = F("Broadcast, waiting for receipt: ");
+    } else if (!polling && share.state == SubmissionState::Uncertain) {
+        message = F("Broadcast uncertain, tracking hash: ");
+    }
+    if (message) {
+        Serial.print(message);
+        Serial.println(share.hash.c_str());
+    }
+}
 } // namespace
 
 void setup() {
     BoardRuntime::beginSerial();
-    Serial.println(F("\n=== Aplo Mining Firmware / restricted session ==="));
     miningembed::MiningSession session;
-    if (!DeviceSetup::readSession(session)) {
+    const char* primaryCa = RPC_PRIMARY_CA;
+    const char* fallbackCa = RPC_FALLBACK_CA;
+    if (!*APLO_WIFI_SSID || !primaryCa || !*primaryCa || !Web3::isHttpsUrl(RPC_PRIMARY) ||
+        (*RPC_FALLBACK && (!fallbackCa || !*fallbackCa || !Web3::isHttpsUrl(RPC_FALLBACK))) ||
+        !miningembed::parseMiningSession(APLO_OWNER_ADDRESS, APLO_SESSION_ADDRESS,
+                                         APLO_AUTHORIZED_CHAIN_ID, APLO_AUTHORIZED_GAPLO_BUDGET,
+                                         APLO_SESSION_EXPIRY_BLOCK, session)) {
+        Serial.println(F("Set Wi-Fi, HTTPS RPC, CA and confirmed session metadata in DeviceConfig.h."));
         return;
     }
-    Web3& client = DeviceSetup::connect();
-    SessionProvisioner::importApprovedSession(sessionKey, session.signer.c_str());
-    Serial.print(F("Session signer: "));
-    Serial.println(sessionKey.Address().c_str());
-    Serial.print(F("Funding/reward owner: "));
-    Serial.println(session.owner.c_str());
-    MiningApplication::begin(client, sessionKey, session);
-    ready = true;
+
+    BoardRuntime::beginWifi(APLO_WIFI_SSID, APLO_WIFI_PASSWORD);
+    for (;;) {
+        if (BoardRuntime::connectWifi(3, wifiTimeoutMs) &&
+            BoardRuntime::synchronizeTime(APLO_NTP_PRIMARY, APLO_NTP_FALLBACK)) {
+            break;
+        }
+        Serial.println(F("Waiting for Wi-Fi and certificate time."));
+        delay(5000);
+    }
+    // ESP8266 allocates its BearSSL client only after association and DHCP.
+    static Web3 web3(RPC_PRIMARY, RPC_FALLBACK);
+    web3.setCertificate(primaryCa, fallbackCa);
+    Serial.println(F("After reset, reconcile any prior share on the owner machine before importing."));
+    do {
+        Serial.println(F("Provision restricted SESSION key: 64 hex characters + newline (not echoed)."));
+    } while (!sessionKey.ReadFromSerial(Serial, session.signer));
+    Serial.println(F("Session key loaded. Starting mining."));
+
+    static aplo::SessionKeys rpc(web3);
+    static miningembed::MiningEmbed application(rpc, sessionKey, session);
+    miner = &application;
 }
 
 void loop() {
-    if (ready && BoardRuntime::ensureWifiConnected(FirmwareConfig::wifiReconnectAttempts,
-                                                   FirmwareConfig::wifiAttemptTimeoutMs,
-                                                   FirmwareConfig::wifiRetryDelayMs)) {
-        MiningApplication::tick();
+    if (miner && BoardRuntime::ensureWifiConnected(2, wifiTimeoutMs, 5000)) {
+        const bool polling = miner->unresolved();
+        miningembed::Submission share;
+        const auto status = miner->step(2000, share);
+        if (status != miningembed::Status::Ok && status != miningembed::Status::NoCandidate) {
+            Serial.println(miningembed::statusName(status));
+        }
+        reportShare(share, polling);
     }
-    BoardRuntime::cooperate();
-    delay(FirmwareConfig::cycleDelayMs);
+    delay(1000);
 }

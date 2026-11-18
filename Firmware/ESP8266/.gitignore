@@ -3,11 +3,11 @@
 .vscode/
 __pycache__/
 include/DeviceConfig.h
-platformio.local.ini
 build-logs/
 *.bin
 *.elf
-.dependency-paths.json
 compile_commands.json
 .local/
-trust-profile.local.json
+include/AploTrustProfile.h
+include/AploTrustEndpoints.h
+include/AploTrustProfile.json

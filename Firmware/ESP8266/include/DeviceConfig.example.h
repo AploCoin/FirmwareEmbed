@@ -5,9 +5,9 @@
 #define APLO_WIFI_PASSWORD ""
 #define APLO_RPC_PRIMARY "https://rpc.example.invalid"
 #define APLO_RPC_FALLBACK ""
-// APLO_TRUST_PROFILE sets the RPC URLs and CA for each endpoint.
-// Without a profile, supply a public PEM root trusted by both configured URLs.
-#define APLO_RPC_ROOT_CA ""
+// Set the public root PEM for each configured endpoint, or generate AploTrustProfile.h.
+#define APLO_RPC_PRIMARY_CA nullptr
+#define APLO_RPC_FALLBACK_CA nullptr
 // Override with reachable LAN NTP servers in isolated networks.
 #define APLO_NTP_PRIMARY "pool.ntp.org"
 #define APLO_NTP_FALLBACK "time.cloudflare.com"

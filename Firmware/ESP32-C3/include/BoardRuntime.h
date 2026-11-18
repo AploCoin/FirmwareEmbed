@@ -8,6 +8,5 @@ void beginWifi(const char* ssid, const char* password);
 bool connectWifi(uint8_t maxAttempts, unsigned long timeoutMs);
 bool ensureWifiConnected(uint8_t maxAttempts, unsigned long timeoutMs, unsigned long retryDelayMs);
 void cooperate();
-void reportMemory(const char* stage);
 bool synchronizeTime(const char* primary, const char* fallback);
 } // namespace BoardRuntime
