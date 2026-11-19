@@ -12,7 +12,7 @@ Standalone AploCoin mining projects for embedded boards. Each project in [Firmwa
 
 Open the chosen project in PlatformIO. The board README covers Wi-Fi, HTTPS RPC, session provisioning and upload. PlatformIO fetches the exact [AploEmbed](https://github.com/AploCoin/AploEmbed) and [MiningEmbed](https://github.com/AploCoin/MiningEmbed) commits listed in that board's platformio.ini.
 
-Edit the selected project's source or build settings to customize a device. The ESP8266 Wi-Fi and heap handling, ESP32-C3 USB and radio settings, WROOM-32U flash and optional LAN time adapter, and ESP32-S3-N16R8 UART console, 16 MB quad flash and octal PSRAM settings are local to their respective folders. To add a board, copy the closest project into a new folder under `Firmware/` and adapt its own settings and runtime.
+Edit the selected project's source or build settings to customize a device. The ESP8266 Wi-Fi and heap handling, ESP32-C3 USB and radio settings, and WROOM-32U flash and optional LAN time adapter are local to their respective folders. To add a board, copy the closest project into a new folder under `Firmware/` and adapt its own settings and runtime.
 
 To package just one board from a Git checkout:
 
