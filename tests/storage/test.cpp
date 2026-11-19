@@ -9,6 +9,7 @@
 #include <deque>
 #include <limits>
 uint32_t testMillis = 0;
+NativeSerial Serial;
 
 // Deterministic fixture randomness for public-key multiplication blinding only.
 extern "C" uint32_t random32() {

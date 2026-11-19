@@ -50,4 +50,4 @@ struct NativeSerial {
     template <typename T> void println(T) {}
 };
 
-static NativeSerial Serial;
+extern NativeSerial Serial;
