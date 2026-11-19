@@ -10,11 +10,11 @@ import struct
 from pathlib import Path
 
 BOARDS = {
-    "esp32dev": ("ESP32", "uart", 4, 0x1000, 0x290000),
-    "esp32-c3-devkitm-1": ("ESP32-C3", "uart", 4, 0, 0x290000),
-    "esp32-wroom-32u": ("ESP32", "uart", 4, 0x1000, 0x290000),
-    "esp12e": ("ESP8266", "uart", 4, 0, 0x300000),
-    "esp32-s3-n16r8": ("ESP32-S3", "uart", 16, 0, 0xC90000),
+    "esp32dev": ("ESP32", ("uart",), 4, 0x1000, 0x290000),
+    "esp32-c3-devkitm-1": ("ESP32-C3", ("uart", "cdc"), 4, 0, 0x290000),
+    "esp32-wroom-32u": ("ESP32", ("uart",), 4, 0x1000, 0x290000),
+    "esp12e": ("ESP8266", ("uart",), 4, 0, 0x300000),
+    "esp32-s3-n16r8": ("ESP32-S3", ("uart",), 16, 0, 0xC90000),
 }
 RAM_BUDGET = {"esp12e": 43008}
 SECTOR = 4096
@@ -45,7 +45,7 @@ def digest(path):
 
 
 def stage(board, build, log, packages, output):
-    family, console, flash_mb, boot_offset, config_offset = BOARDS[board]
+    family, consoles, flash_mb, boot_offset, config_offset = BOARDS[board]
     config_bytes = 0xFA000 if family == "ESP8266" else 0x10000
     sizes = measure(log, board)
     output.mkdir(parents=True, exist_ok=True)
@@ -104,7 +104,8 @@ def stage(board, build, log, packages, output):
         {
             "id": board,
             "chipFamily": family,
-            "serialType": console,
+            "serialType": consoles[0],
+            "serialTypes": list(consoles),
             "flashBytes": flash_mb * 1024 * 1024,
             "layout": layout,
             "storage": {"offset": config_offset, "size": config_bytes},
@@ -139,11 +140,17 @@ def assemble(staged, output, version):
                 "version": version,
                 "new_install_prompt_erase": True,
                 "new_install_improv_wait_time": 0,
-                "builds": [{
-                    "chipFamily": profile["chipFamily"],
-                    "serialType": profile["serialType"],
-                    "parts": [{"path": part["path"], "offset": part["offset"]} for part in profile["install"]],
-                }],
+                "builds": [
+                    {
+                        "chipFamily": profile["chipFamily"],
+                        "serialType": console,
+                        "parts": [
+                            {"path": part["path"], "offset": part["offset"]}
+                            for part in profile["install"]
+                        ],
+                    }
+                    for console in profile["serialTypes"]
+                ],
             },
         )
         published.append(web_manifest)

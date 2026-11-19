@@ -1,4 +1,5 @@
 #include "SerialConfig.h"
+#include "BoardRuntime.h"
 #include <Arduino.h>
 #include <Web3.h>
 #include <cstring>
@@ -200,7 +201,8 @@ bool set(Config& c, const char* name, std::string& value) {
 }
 } // namespace
 
-SerialConfig::SerialConfig(DeviceConfig& store) : store_(store), bootMs_(millis()) {}
+SerialConfig::SerialConfig(DeviceConfig& store, DiagnosticsReader diagnostics)
+    : store_(store), diagnostics_(diagnostics), bootMs_(millis()) {}
 
 SerialConfig::~SerialConfig() {
     clearStage();
@@ -225,6 +227,15 @@ void SerialConfig::clearStage() {
 }
 
 void SerialConfig::poll(Stream& port, const char* state) {
+    if (port_ != &port) {
+        if (port_) {
+            authenticated_ = false;
+            clearStage();
+            clearLine();
+            discard_ = false;
+        }
+        port_ = &port;
+    }
     uint32_t now = millis();
     if (uint32_t(now - bootMs_) >= 120000) {
         enrollmentClosed_ = true;
@@ -340,6 +351,31 @@ void SerialConfig::command(Stream& port, const char* state) {
         port.print(safeState(state));
         port.print(" journal=");
         port.println(store_.pending() ? store_.pending()->hash.c_str() : "NONE");
+        return;
+    }
+    if (!strcmp(cmd, "DIAG") && count == 3) {
+        if (!diagnostics_) {
+            reply(port, id, "ERR unavailable");
+            return;
+        }
+        const BoardDiagnostics sample = diagnostics_();
+        port.print(F("APLO1 "));
+        port.print(id);
+        port.print(F(" OK diag reset_reason="));
+        port.print(sample.resetReason);
+        port.print(F(" uptime_ms="));
+        port.print(now);
+        port.print(F(" cpu_mhz="));
+        port.print(sample.cpuMHz);
+        port.print(F(" flash_bytes="));
+        port.print(sample.flashBytes);
+        port.print(F(" psram_bytes="));
+        port.print(sample.psramBytes);
+        port.print(F(" heap_free="));
+        port.print(sample.freeHeapBytes);
+        port.print(F(" heap_largest="));
+        port.print(sample.largestHeapBlockBytes);
+        port.println("");
         return;
     }
     if (store_.locked() || store_.restartRequested()) {

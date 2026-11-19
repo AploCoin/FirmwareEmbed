@@ -24,6 +24,9 @@ or RAM-only secrets are imported automatically.
 ## Transport and authentication
 
 Use a local USB Serial connection at 115200 baud, 8N1, with terminal echo disabled.
+ESP32-C3 accepts native USB Serial/JTAG and on-board USB-to-UART. Native USB takes
+priority when both are connected. Switching ports clears the previous authentication,
+partial request and staged configuration.
 This API accepts no network-origin provisioning. It provides no USB encryption:
 the connected host and anyone who can observe the USB/UART link must be trusted.
 Never put tokens or key material in shell history or enable serial request logging.
@@ -159,6 +162,18 @@ hash; no raw signed bytes are exposed. State tokens accepted from runtime are
 `session_expired`, `budget_exceeded`, `insufficient_funds`, `not_staked`, `cooldown`,
 `recovery_required`, `sign_failed`, `random_unavailable`, `setup`, `time`, `ready`,
 `disabled`, `error`, `storage`, `connecting` and `offline`; all others become `other`.
+
+Send `APLO1 21 DIAG` to sample board diagnostics before provisioning or while mining.
+It is available without authentication and returns numeric fields:
+
+```text
+APLO1 21 OK diag reset_reason=3 uptime_ms=1024 cpu_mhz=160 flash_bytes=4194304 psram_bytes=0 heap_free=28256 heap_largest=28040
+```
+
+`reset_reason` is the Arduino core's platform-specific code. On ESP8266, 1 is a
+hardware watchdog reset and 3 is a software watchdog reset. `uptime_ms` is the
+32-bit uptime counter. The heap values report the free bytes and largest free
+allocation block at the time of the request. A board without PSRAM reports zero.
 
 While a transaction is pending, authenticated BEGIN/SET/CA/COMMIT may repair Wi-Fi,
 CA roots, NTP, polling settings or the Operator verifier. The journal is copied

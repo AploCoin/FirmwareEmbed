@@ -3,9 +3,12 @@
 class Stream;
 
 namespace firmware {
+struct BoardDiagnostics;
+
 class SerialConfig {
 public:
-    explicit SerialConfig(DeviceConfig& store);
+    using DiagnosticsReader = BoardDiagnostics (*)();
+    explicit SerialConfig(DeviceConfig& store, DiagnosticsReader diagnostics = nullptr);
     ~SerialConfig();
     // Bounded nonblocking input. Never print the supplied state verbatim.
     void poll(Stream& port, const char* state);
@@ -24,6 +27,8 @@ private:
     void clearStage();
     void clearLine();
     DeviceConfig& store_;
+    DiagnosticsReader diagnostics_;
+    Stream* port_ = nullptr;
     Config* staged_ = nullptr;
     std::string upload_;
     size_t uploadLength_ = 0;

@@ -1,6 +1,6 @@
 # Installation and firmware updates
 
-Choose the exact PlatformIO board profile. ESP32 DevKit and WROOM-32U both identify as ESP32 over USB, so chip-family discovery alone cannot select the profile. ESP32-C3-DevKitM-1 uses the USB-to-UART bridge on its Micro-USB connector. [Espressif DevKitM-1 guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32c3/esp32-c3-devkitm-1/user_guide.html)
+Choose the exact PlatformIO board profile. ESP32 DevKit and WROOM-32U both identify as ESP32 over USB, so chip-family discovery alone cannot select the profile. The ESP32-C3 image supports the DevKitM-1 built-in USB-to-UART bridge and native USB Serial/JTAG on boards with that connector. [ESP32-C3 profile](../Firmware/ESP32-C3/README.md)
 
 ## First v1.0 installation
 
@@ -18,6 +18,6 @@ Schema v1 records are read by compatible images using the same layout. Unrecogni
 
 GitHub Actions builds all profiles, runs native tests, enforces flash/static-RAM budgets, and assembles binaries, manifests and `SHA256SUMS`. A validated version tag `vMAJOR.MINOR[.PATCH]` publishes the assets to its GitHub release after the checks pass. Make the exact SDK and mining commits in `libraries.ini` available on their respective GitHub repositories before running release CI.
 
-- `manifest.json` is the versioned flasher index. Select `profiles[].id` explicitly and use only its `install` or `update` list. Each entry gives a relative asset path, byte offset, size and SHA-256. `storage` identifies the flash region that the flasher must preserve.
+- `manifest.json` is the versioned flasher index. Select `profiles[].id` explicitly and use only its `install` or `update` list. Each entry gives a relative asset path, byte offset, size and SHA-256. `storage` identifies the flash region that the flasher must preserve. `serialTypes` lists the supported connection types. Each ESP32-C3 connection uses the same set of binaries.
 - `manifest-<board>.json` is a first-install descriptor for ESP Web Tools. Use **Skip erase** to preserve data and use the flasher index's application-only path for v1.x updates. [ESP Web Tools manifest documentation](https://esphome.github.io/esp-web-tools/)
 - `<board>-firmware.bin` is the application for both modes. Other `.bin` assets contain the ESP32 boot/partition components referenced by the install descriptor.

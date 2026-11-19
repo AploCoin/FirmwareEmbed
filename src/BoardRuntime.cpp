@@ -3,6 +3,10 @@
 #include <AploPlatform.h>
 #include <time.h>
 
+#if defined(ESP32)
+#include <esp_system.h>
+#endif
+
 namespace firmware {
 namespace {
 constexpr uint32_t wifiTimeoutMs = 45000;
@@ -61,6 +65,23 @@ NetworkState BoardRuntime::poll() {
         clockStarted_ = true;
     }
     return time(nullptr) >= minimumUnixTime ? NetworkState::Ready : NetworkState::Clock;
+}
+
+BoardDiagnostics BoardRuntime::diagnostics() {
+    BoardDiagnostics result{};
+    result.cpuMHz = ESP.getCpuFreqMHz();
+    result.freeHeapBytes = ESP.getFreeHeap();
+#if defined(ESP8266)
+    result.resetReason = ESP.getResetInfoPtr()->reason;
+    result.flashBytes = ESP.getFlashChipRealSize();
+    result.largestHeapBlockBytes = ESP.getMaxFreeBlockSize();
+#else
+    result.resetReason = static_cast<uint32_t>(esp_reset_reason());
+    result.flashBytes = ESP.getFlashChipSize();
+    result.psramBytes = ESP.getPsramSize();
+    result.largestHeapBlockBytes = ESP.getMaxAllocHeap();
+#endif
+    return result;
 }
 
 } // namespace firmware

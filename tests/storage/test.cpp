@@ -1,3 +1,4 @@
+#include "BoardRuntime.h"
 #include "DeviceConfig.h"
 #include "SerialConfig.h"
 #include <Arduino.h>
@@ -358,9 +359,9 @@ void validation() {
     c.fallbackCa = "garbage";
     assert(!DeviceConfig::validate(c));
     c = configured();
-    c.chainId = "31337";
+    c.chainId = "1337";
     assert(DeviceConfig::validate(c));
-    c.chainId = "031337";
+    c.chainId = "01337";
     assert(!DeviceConfig::validate(c));
     c.chainId = "0";
     assert(!DeviceConfig::validate(c));
@@ -400,12 +401,26 @@ void serial() {
     );
     DeviceConfig store(&flash);
     assert(store.begin());
-    SerialConfig serial(store);
+    SerialConfig serial(store, []() -> firmware::BoardDiagnostics {
+        return {3, 160, 4194304, 0, 28256, 28040};
+    });
     auto status = port.run(serial, "APLO1 2 STATUS\n", "secret raw RPC error");
     assert(
         status.find("state=other") != std::string::npos &&
         status.find("secret") == std::string::npos
     );
+    assert(
+        port.run(serial, "APLO1 80 DIAG\n") ==
+        "APLO1 80 OK diag reset_reason=3 uptime_ms=" + std::to_string(testMillis) +
+            " cpu_mhz=160 flash_bytes=4194304 psram_bytes=0 heap_free=28256 heap_largest=28040\n"
+    );
+    assert(port.run(serial, "APLO1 81 AUTH " + token + "\n") == "APLO1 81 OK authenticated\n");
+    assert(port.run(serial, "APLO1 82 BEGIN\n") == "APLO1 82 OK\n");
+    assert(port.run(serial, "APLO1 83 ").empty());
+    Port alternate;
+    assert(alternate.run(serial, "APLO1 84 COMMIT\n") == "APLO1 84 ERR auth\n");
+    assert(!serial.provisioningActive());
+    assert(port.run(serial, "APLO1 85 BEGIN\n") == "APLO1 85 ERR auth\n");
     assert(port.run(serial, "APLO1 3 BEGIN\n").find("ERR auth") != std::string::npos);
     assert(port.run(serial, "APLO1 4 AUTH " + other + "\n").find("ERR auth") != std::string::npos);
     assert(port.run(serial, "APLO1 5 AUTH " + token + "\n").find("ERR auth") != std::string::npos);

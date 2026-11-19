@@ -8,7 +8,7 @@
 
 namespace {
 firmware::DeviceConfig store;
-firmware::SerialConfig serialConfig(store);
+firmware::SerialConfig serialConfig(store, firmware::BoardRuntime::diagnostics);
 firmware::BoardRuntime network;
 aplo::SessionKey key;
 
@@ -19,6 +19,15 @@ const char* lastMiningState = "mining";
 bool trustPaused = false;
 bool miningBlocked = false;
 uint32_t lastStepAt = 0;
+
+Stream& consolePort() {
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && ARDUINO_USB_MODE && !ARDUINO_USB_CDC_ON_BOOT
+    if (HWCDC::isPlugged()) {
+        return USBSerial;
+    }
+#endif
+    return Serial;
+}
 
 void setTrust(const firmware::Config& config) {
     web3->setCertificate(
@@ -157,6 +166,10 @@ const char* runDevice() {
 void setup() {
     Serial.setRxBufferSize(1024);
     Serial.begin(115200);
+#if defined(CONFIG_IDF_TARGET_ESP32C3) && ARDUINO_USB_MODE && !ARDUINO_USB_CDC_ON_BOOT
+    USBSerial.setRxBufferSize(1024);
+    USBSerial.begin(115200);
+#endif
     if (store.begin() && store.ready()) {
         const firmware::Config& config = store.config();
         network.begin(
@@ -169,9 +182,10 @@ void setup() {
 }
 
 void loop() {
-    serialConfig.poll(Serial, state);
+    Stream& port = consolePort();
+    serialConfig.poll(port, state);
     if (serialConfig.restartRequested()) {
-        Serial.flush();
+        port.flush();
         delay(100);
         ESP.restart();
         return;
