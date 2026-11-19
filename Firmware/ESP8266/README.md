@@ -2,7 +2,7 @@
 
 This directory is a complete PlatformIO project. Copy it anywhere, open it in PlatformIO and edit its own `src/`, `include/` and `platformio.ini`.
 
-Uses the ESP-12E board profile. The RPC must support TLS MFLN with 1,024-byte fragments. Use the compact trust profile for the configured endpoints.
+Uses the ESP-12E board profile at 160 MHz. BearSSL certificate verification cannot yield, so the build raises its side stack and feeds the soft watchdog during the handshake. The RPC must support TLS MFLN with 1,024-byte fragments and present an ECDSA P-256 certificate. Use the compact trust profile for the configured endpoints.
 
 ## Set up
 

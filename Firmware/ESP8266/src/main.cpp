@@ -83,10 +83,20 @@ bool readConfiguration(
     return true;
 }
 
+void reportMemory(const __FlashStringHelper* where) {
+    Serial.print(F("heap "));
+    Serial.print(where);
+    Serial.print(F(" free="));
+    Serial.print(ESP.getFreeHeap());
+    Serial.print(F(" largest="));
+    Serial.println(ESP.getMaxFreeBlockSize());
+}
+
 void waitForNetwork() {
     for (;;) {
         const bool wifiConnected = BoardRuntime::connectWifi(wifiConnectAttempts, wifiTimeoutMs);
         if (wifiConnected && BoardRuntime::synchronizeTime(APLO_NTP_PRIMARY, APLO_NTP_FALLBACK)) {
+            reportMemory(F("network"));
             return;
         }
 
@@ -123,11 +133,20 @@ void reportShare(const miningembed::Submission& share, bool pollingReceipt) {
 
     Serial.print(message);
     Serial.println(share.hash.c_str());
+    if (share.state == SubmissionState::Confirmed) {
+        reportMemory(F("confirmed"));
+    }
 }
+
+uint32_t memoryReportCycle = 0;
 
 void runMiningCycle() {
     if (miner == nullptr) {
         return;
+    }
+
+    if (++memoryReportCycle % 30 == 0) {
+        reportMemory(F("cycle"));
     }
 
     if (!BoardRuntime::ensureWifiConnected(
@@ -179,6 +198,7 @@ void setup() {
     } while (!sessionKey.ReadFromSerial(Serial, session.signer));
 
     Serial.println(F("Session key loaded. Starting mining."));
+    reportMemory(F("session"));
 
     static aplo::SessionKeys rpc(web3);
     static miningembed::MiningEmbed application(rpc, sessionKey, session);
