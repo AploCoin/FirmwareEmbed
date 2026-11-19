@@ -83,32 +83,10 @@ bool readConfiguration(
     return true;
 }
 
-void reportMemory(const __FlashStringHelper* where) {
-    Serial.print(F("heap "));
-    Serial.print(where);
-    Serial.print(F(" free="));
-    Serial.print(ESP.getFreeHeap());
-    Serial.print(F(" largest="));
-    Serial.println(ESP.getMaxAllocHeap());
-}
-
-void reportBoard() {
-    Serial.print(F("board esp32-s3 rev="));
-    Serial.print(ESP.getChipRevision());
-    Serial.print(F(" cpu_mhz="));
-    Serial.print(ESP.getCpuFreqMHz());
-    Serial.print(F(" flash="));
-    Serial.print(ESP.getFlashChipSize());
-    Serial.print(F(" psram="));
-    Serial.println(ESP.getPsramSize());
-    reportMemory(F("boot"));
-}
-
 void waitForNetwork() {
     for (;;) {
         const bool wifiConnected = BoardRuntime::connectWifi(wifiConnectAttempts, wifiTimeoutMs);
         if (wifiConnected && BoardRuntime::synchronizeTime(APLO_NTP_PRIMARY, APLO_NTP_FALLBACK)) {
-            reportMemory(F("network"));
             return;
         }
 
@@ -169,14 +147,12 @@ void runMiningCycle() {
     }
 
     reportShare(share, pollingReceipt);
-    reportMemory(F("cycle"));
 }
 
 } // namespace
 
 void setup() {
     BoardRuntime::beginSerial();
-    reportBoard();
 
     miningembed::MiningSession session;
     const char* const primaryCa = RPC_PRIMARY_CA;
@@ -202,7 +178,6 @@ void setup() {
     } while (!sessionKey.ReadFromSerial(Serial, session.signer));
 
     Serial.println(F("Session key loaded. Starting mining."));
-    reportMemory(F("session"));
 
     static aplo::SessionKeys rpc(web3);
     static miningembed::MiningEmbed application(rpc, sessionKey, session);

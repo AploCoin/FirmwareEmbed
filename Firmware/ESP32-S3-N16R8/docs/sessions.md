@@ -13,7 +13,7 @@ The device never needs the owner private key. The owner is the funding and rewar
 
 ## Lifecycle and recovery
 
-DeviceConfig selects authenticated HTTPS trust (bundled ISRG Root X1 or an explicit PEM root) and reachable NTP servers; ESP8266 servers must also negotiate MFLN. A TLS/time failure pauses startup or checked RPC work and never enables plaintext/insecure fallback.
+DeviceConfig selects authenticated HTTPS trust (bundled ISRG Root X1 or an explicit PEM root) and reachable NTP servers. A TLS/time failure pauses startup or checked RPC work and never enables plaintext/insecure fallback.
 
 The firmware checks the registered scope and remaining budget before spending gas. The gas allowance must cover the maximum fee reservation (`gasLimit * gasPrice`), although actual included fees reduce the remaining allowance. The owner also needs enough GAPLO; the allowance does not deposit funds. Zero APLO allowance is intentional for mining, whose native transaction value is zero. Session authorization does not stake funds or grant arbitrary contract access.
 
@@ -23,4 +23,4 @@ The owner can use `SessionKeys::PrepareRevoke(sessionAddress, owner, gasLimit, t
 
 On a reboot, import the same session key only if its existing authorization is still active and matches the approved policy; refresh chain ID, record, pending nonce, miner state and receipts rather than resetting nonce to zero. The firmware does not persist keys or pending hashes across power loss. If a prior transaction is uncertain, reconcile its public hash/session nonce on the owner machine before restarting; revoke and issue a fresh key if safe reconciliation is unavailable. Expired, revoked or previously used session addresses cannot be registered again; issue a new CSPRNG key and fresh proof instead. A reboot does not renew a session or refill its budget.
 
-These rules follow `AploNode/builtin/sessionkeys/registry.go`, `core/state_transition.go` and WebMiner's `src/features/webminer/session-keys/protocol.ts`. Hardware and live-network behavior must be validated separately from compile-time checks.
+These rules follow `AploNode/builtin/sessionkeys/registry.go`, `core/state_transition.go` and WebMiner's `src/features/webminer/session-keys/protocol.ts`.

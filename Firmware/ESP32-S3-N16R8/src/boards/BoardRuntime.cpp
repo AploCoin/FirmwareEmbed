@@ -64,9 +64,7 @@ bool BoardRuntime::connectWifi(uint8_t maxAttempts, unsigned long timeoutMs) {
     for (uint8_t attempt = 0; attempt < maxAttempts; ++attempt) {
         if (connectWifiOnce(timeoutMs)) {
             Serial.print(F("WiFi connected: "));
-            Serial.print(WiFi.localIP());
-            Serial.print(F(" rssi="));
-            Serial.println(WiFi.RSSI());
+            Serial.println(WiFi.localIP());
             lastWifiRetryMs = 0;
             return true;
         }
