@@ -2,6 +2,7 @@
 #include <MiningEmbed.h>
 #include <Web3.h>
 #include <pgmspace.h>
+
 #include "BoardRuntime.h"
 #include "FirmwareConfig.h"
 
@@ -19,7 +20,15 @@
 #endif
 
 namespace {
+
+constexpr uint8_t wifiConnectAttempts = 3;
+constexpr uint8_t wifiReconnectAttempts = 2;
 constexpr unsigned long wifiTimeoutMs = 45000;
+constexpr unsigned long wifiRetryDelayMs = 5000;
+
+constexpr uint32_t hashesPerCycle = 2000;
+constexpr unsigned long miningIntervalMs = 1000;
+
 aplo::SessionKey sessionKey;
 miningembed::MiningEmbed* miner = nullptr;
 
@@ -36,8 +45,11 @@ bool hasRpcConfiguration(const char* url, const char* ca) {
     return Web3::isHttpsUrl(url);
 }
 
-bool readConfiguration(const char* primaryCa, const char* fallbackCa,
-                       miningembed::MiningSession& session) {
+bool readConfiguration(
+    const char* primaryCa,
+    const char* fallbackCa,
+    miningembed::MiningSession& session
+) {
     if (APLO_WIFI_SSID[0] == '\0') {
         Serial.println(F("Set the Wi-Fi SSID in DeviceConfig.h."));
         return false;
@@ -48,14 +60,21 @@ bool readConfiguration(const char* primaryCa, const char* fallbackCa,
         return false;
     }
 
-    if (RPC_FALLBACK[0] != '\0' && !hasRpcConfiguration(RPC_FALLBACK, fallbackCa)) {
+    const bool hasFallbackRpc = RPC_FALLBACK[0] != '\0';
+    if (hasFallbackRpc && !hasRpcConfiguration(RPC_FALLBACK, fallbackCa)) {
         Serial.println(F("Set a valid fallback HTTPS RPC URL and its CA."));
         return false;
     }
 
     const bool sessionIsValid = miningembed::parseMiningSession(
-        APLO_OWNER_ADDRESS, APLO_SESSION_ADDRESS, APLO_AUTHORIZED_CHAIN_ID,
-        APLO_AUTHORIZED_GAPLO_BUDGET, APLO_SESSION_EXPIRY_BLOCK, session);
+        APLO_OWNER_ADDRESS,
+        APLO_SESSION_ADDRESS,
+        APLO_AUTHORIZED_CHAIN_ID,
+        APLO_AUTHORIZED_GAPLO_BUDGET,
+        APLO_SESSION_EXPIRY_BLOCK,
+        session
+    );
+
     if (!sessionIsValid) {
         Serial.println(F("Set the confirmed mining session metadata in DeviceConfig.h."));
         return false;
@@ -64,52 +83,101 @@ bool readConfiguration(const char* primaryCa, const char* fallbackCa,
     return true;
 }
 
-void reportShare(const miningembed::Submission& share, bool polling) {
-    using miningembed::SubmissionState;
-    const __FlashStringHelper* message = nullptr;
-    if (share.state == SubmissionState::Confirmed) {
-        message = F("Receipt status=1, confirmed: ");
-    } else if (share.state == SubmissionState::Reverted) {
-        message = F("Receipt status=0, reverted: ");
-    } else if (!polling && share.state == SubmissionState::Broadcast) {
-        message = F("Broadcast, waiting for receipt: ");
-    } else if (!polling && share.state == SubmissionState::Uncertain) {
-        message = F("Broadcast uncertain, tracking hash: ");
-    }
-    if (message) {
-        Serial.print(message);
-        Serial.println(share.hash.c_str());
+void waitForNetwork() {
+    for (;;) {
+        const bool wifiConnected = BoardRuntime::connectWifi(wifiConnectAttempts, wifiTimeoutMs);
+        if (wifiConnected && BoardRuntime::synchronizeTime(APLO_NTP_PRIMARY, APLO_NTP_FALLBACK)) {
+            return;
+        }
+
+        Serial.println(F("Waiting for Wi-Fi and certificate time."));
+        delay(wifiRetryDelayMs);
     }
 }
+
+void reportShare(const miningembed::Submission& share, bool pollingReceipt) {
+    using miningembed::SubmissionState;
+
+    const __FlashStringHelper* message = nullptr;
+    switch (share.state) {
+    case SubmissionState::Confirmed:
+        message = F("Receipt status=1, confirmed: ");
+        break;
+    case SubmissionState::Reverted:
+        message = F("Receipt status=0, reverted: ");
+        break;
+    case SubmissionState::Broadcast:
+        message = pollingReceipt ? nullptr : F("Broadcast, waiting for receipt: ");
+        break;
+    case SubmissionState::Uncertain:
+        message = pollingReceipt ? nullptr : F("Broadcast uncertain, tracking hash: ");
+        break;
+    case SubmissionState::NotSent:
+    case SubmissionState::Pending:
+        break;
+    }
+
+    if (message == nullptr) {
+        return;
+    }
+
+    Serial.print(message);
+    Serial.println(share.hash.c_str());
+}
+
+void runMiningCycle() {
+    if (miner == nullptr) {
+        return;
+    }
+
+    if (!BoardRuntime::ensureWifiConnected(
+            wifiReconnectAttempts,
+            wifiTimeoutMs,
+            wifiRetryDelayMs
+        )) {
+        return;
+    }
+
+    const bool pollingReceipt = miner->unresolved();
+    miningembed::Submission share;
+    const auto status = miner->step(hashesPerCycle, share);
+
+    if (status != miningembed::Status::Ok && status != miningembed::Status::NoCandidate) {
+        Serial.println(miningembed::statusName(status));
+    }
+
+    reportShare(share, pollingReceipt);
+}
+
 } // namespace
 
 void setup() {
     BoardRuntime::beginSerial();
+
     miningembed::MiningSession session;
-    const char* primaryCa = RPC_PRIMARY_CA;
-    const char* fallbackCa = RPC_FALLBACK_CA;
+    const char* const primaryCa = RPC_PRIMARY_CA;
+    const char* const fallbackCa = RPC_FALLBACK_CA;
     if (!readConfiguration(primaryCa, fallbackCa, session)) {
         return;
     }
 
     BoardRuntime::beginWifi(APLO_WIFI_SSID, APLO_WIFI_PASSWORD);
-    for (;;) {
-        if (BoardRuntime::connectWifi(3, wifiTimeoutMs) &&
-            BoardRuntime::synchronizeTime(APLO_NTP_PRIMARY, APLO_NTP_FALLBACK)) {
-            break;
-        }
-        Serial.println(F("Waiting for Wi-Fi and certificate time."));
-        delay(5000);
-    }
+    waitForNetwork();
+
     // ESP8266 allocates its BearSSL client only after association and DHCP.
     static Web3 web3(RPC_PRIMARY, RPC_FALLBACK);
     web3.setCertificate(primaryCa, fallbackCa);
+
     Serial.println(
-        F("After reset, reconcile any prior share on the owner machine before importing."));
+        F("After reset, reconcile any prior share on the owner machine before importing.")
+    );
+
     do {
         Serial.println(
-            F("Provision restricted SESSION key: 64 hex characters + newline (not echoed)."));
+            F("Provision restricted SESSION key: 64 hex characters + newline (not echoed).")
+        );
     } while (!sessionKey.ReadFromSerial(Serial, session.signer));
+
     Serial.println(F("Session key loaded. Starting mining."));
 
     static aplo::SessionKeys rpc(web3);
@@ -118,14 +186,6 @@ void setup() {
 }
 
 void loop() {
-    if (miner && BoardRuntime::ensureWifiConnected(2, wifiTimeoutMs, 5000)) {
-        const bool polling = miner->unresolved();
-        miningembed::Submission share;
-        const auto status = miner->step(2000, share);
-        if (status != miningembed::Status::Ok && status != miningembed::Status::NoCandidate) {
-            Serial.println(miningembed::statusName(status));
-        }
-        reportShare(share, polling);
-    }
-    delay(1000);
+    runMiningCycle();
+    delay(miningIntervalMs);
 }
