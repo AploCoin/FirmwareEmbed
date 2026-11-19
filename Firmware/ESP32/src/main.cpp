@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <MiningEmbed.h>
 #include <Web3.h>
+#include <pgmspace.h>
 #include "BoardRuntime.h"
 #include "FirmwareConfig.h"
 
@@ -21,6 +22,47 @@ namespace {
 constexpr unsigned long wifiTimeoutMs = 45000;
 aplo::SessionKey sessionKey;
 miningembed::MiningEmbed* miner = nullptr;
+
+bool hasRpcConfiguration(const char* url, const char* ca) {
+    if (ca == nullptr) {
+        return false;
+    }
+
+    // The CA can live in PROGMEM on ESP8266.
+    if (pgm_read_byte(ca) == 0) {
+        return false;
+    }
+
+    return Web3::isHttpsUrl(url);
+}
+
+bool readConfiguration(const char* primaryCa, const char* fallbackCa,
+                       miningembed::MiningSession& session) {
+    if (APLO_WIFI_SSID[0] == '\0') {
+        Serial.println(F("Set the Wi-Fi SSID in DeviceConfig.h."));
+        return false;
+    }
+
+    if (!hasRpcConfiguration(RPC_PRIMARY, primaryCa)) {
+        Serial.println(F("Set a valid primary HTTPS RPC URL and its CA."));
+        return false;
+    }
+
+    if (RPC_FALLBACK[0] != '\0' && !hasRpcConfiguration(RPC_FALLBACK, fallbackCa)) {
+        Serial.println(F("Set a valid fallback HTTPS RPC URL and its CA."));
+        return false;
+    }
+
+    const bool sessionIsValid = miningembed::parseMiningSession(
+        APLO_OWNER_ADDRESS, APLO_SESSION_ADDRESS, APLO_AUTHORIZED_CHAIN_ID,
+        APLO_AUTHORIZED_GAPLO_BUDGET, APLO_SESSION_EXPIRY_BLOCK, session);
+    if (!sessionIsValid) {
+        Serial.println(F("Set the confirmed mining session metadata in DeviceConfig.h."));
+        return false;
+    }
+
+    return true;
+}
 
 void reportShare(const miningembed::Submission& share, bool polling) {
     using miningembed::SubmissionState;
@@ -46,12 +88,7 @@ void setup() {
     miningembed::MiningSession session;
     const char* primaryCa = RPC_PRIMARY_CA;
     const char* fallbackCa = RPC_FALLBACK_CA;
-    if (!*APLO_WIFI_SSID || !primaryCa || !*primaryCa || !Web3::isHttpsUrl(RPC_PRIMARY) ||
-        (*RPC_FALLBACK && (!fallbackCa || !*fallbackCa || !Web3::isHttpsUrl(RPC_FALLBACK))) ||
-        !miningembed::parseMiningSession(APLO_OWNER_ADDRESS, APLO_SESSION_ADDRESS,
-                                         APLO_AUTHORIZED_CHAIN_ID, APLO_AUTHORIZED_GAPLO_BUDGET,
-                                         APLO_SESSION_EXPIRY_BLOCK, session)) {
-        Serial.println(F("Set Wi-Fi, HTTPS RPC, CA and confirmed session metadata in DeviceConfig.h."));
+    if (!readConfiguration(primaryCa, fallbackCa, session)) {
         return;
     }
 
@@ -67,9 +104,11 @@ void setup() {
     // ESP8266 allocates its BearSSL client only after association and DHCP.
     static Web3 web3(RPC_PRIMARY, RPC_FALLBACK);
     web3.setCertificate(primaryCa, fallbackCa);
-    Serial.println(F("After reset, reconcile any prior share on the owner machine before importing."));
+    Serial.println(
+        F("After reset, reconcile any prior share on the owner machine before importing."));
     do {
-        Serial.println(F("Provision restricted SESSION key: 64 hex characters + newline (not echoed)."));
+        Serial.println(
+            F("Provision restricted SESSION key: 64 hex characters + newline (not echoed)."));
     } while (!sessionKey.ReadFromSerial(Serial, session.signer));
     Serial.println(F("Session key loaded. Starting mining."));
 
