@@ -1,23 +1,20 @@
-# FirmwareEmbed
+# FirmwareEmbed v1.0
 
-Standalone AploCoin mining projects for embedded boards. Each project in [Firmware/](Firmware/) can be copied to a new directory and opened directly in PlatformIO. Its board code and pinned library dependencies travel with it.
+AploCoin mining firmware with two modes in one image per board. Set up the device over USB Serial to use an owner-authorized Session Key or a Direct Private Key. Wi-Fi, RPC endpoints, TLS trust, settings, the provisioned key and outstanding transactions are stored in onboard flash.
 
-| Board | Project | PlatformIO environment |
+| Board | PlatformIO environment | Configuration storage |
 | --- | --- | --- |
-| ESP8266 ESP-12E | [ESP8266](Firmware/ESP8266/) | `esp12e` |
-| ESP32 DevKit | [ESP32](Firmware/ESP32/) | `esp32dev` |
-| ESP32-C3 DevKitM-1 | [ESP32-C3](Firmware/ESP32-C3/) | `esp32-c3-devkitm-1` |
-| ESP32-WROOM-32U | [ESP32-WROOM-32U](Firmware/ESP32-WROOM-32U/) | `esp32-wroom-32u` |
-| ESP32-S3 N16R8 | [ESP32-S3-N16R8](Firmware/ESP32-S3-N16R8/) | `esp32-s3-n16r8` |
+| ESP32 DevKit | `esp32dev` | NVS |
+| ESP32-C3-DevKitM-1 | `esp32-c3-devkitm-1` | NVS |
+| ESP32-WROOM-32U | `esp32-wroom-32u` | NVS |
+| ESP8266 ESP-12E (4 MB) | `esp12e` | LittleFS |
+| ESP32-S3 N16R8 | `esp32-s3-n16r8` | NVS |
 
-Open the chosen project in PlatformIO. The board README covers Wi-Fi, HTTPS RPC, session provisioning and upload. PlatformIO fetches the exact [AploEmbed](https://github.com/AploCoin/AploEmbed) and [MiningEmbed](https://github.com/AploCoin/MiningEmbed) commits listed in that board's platformio.ini.
-
-Edit the selected project's source or build settings to customize a device. The ESP8266 Wi-Fi and heap handling, ESP32-C3 USB and radio settings, and WROOM-32U flash and optional LAN time adapter are local to their respective folders. To add a board, copy the closest project into a new folder under `Firmware/` and adapt its own settings and runtime.
-
-To package just one board from a Git checkout:
+Build from the repository root with PlatformIO Core 6.1.19. The [library lock](libraries.ini) pins the SDK and mining libraries. To build with both libraries as sibling checkouts, use the local configuration.
 
 ~~~sh
-git archive --format=zip -o FirmwareEmbed-ESP8266.zip HEAD:Firmware/ESP8266
+pio run -e esp12e
+pio run -c platformio-local.ini -e esp12e
 ~~~
 
-[Architecture](docs/architecture.md) · [Session lifecycle](docs/sessions.md)
+[Installation, updates and artifacts](docs/flash.md) · [USB Serial API](docs/serial-api.md) · [Mining modes and recovery](docs/sessions.md) · [Architecture](docs/architecture.md) · [Verification](docs/validation.md)

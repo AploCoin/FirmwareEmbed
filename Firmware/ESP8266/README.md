@@ -1,30 +1,7 @@
-# ESP8266 ESP-12E mining firmware
+# ESP8266 ESP-12E
 
-This directory is a complete PlatformIO project. Copy it anywhere, open it in PlatformIO and edit its own `src/`, `include/` and `platformio.ini`.
+This profile requires 4 MB flash, runs at 160 MHz, and requires 1024-byte TLS MFLN on each HTTPS RPC endpoint.
 
-Uses the ESP-12E board profile at 160 MHz. The RPC must support TLS MFLN with 1,024-byte fragments. Use the compact trust profile for the configured endpoints.
+Build from the repository root with `pio run -e esp12e`, or open this directory in PlatformIO. Keep this directory inside the FirmwareEmbed checkout.
 
-## Set up
-
-1. Install PlatformIO and Git. Open this folder directly.
-2. Copy `include/DeviceConfig.example.h` to `include/DeviceConfig.h`. Fill in Wi-Fi, HTTPS RPC and the public metadata from your confirmed session. Follow [session setup](docs/sessions.md) to create or renew it.
-3. For manual CA setup, replace the `APLO_RPC_PRIMARY_CA` definition with your public root PEM. Set `APLO_RPC_FALLBACK_CA` too if you configure a second RPC.
-
-   ~~~cpp
-   static const char rpcCa[] PROGMEM = R"PEM(
-   Paste the public PEM root certificate here.
-   )PEM";
-   #define APLO_RPC_PRIMARY_CA rpcCa
-   ~~~
-
-   For a versioned CA set, you can generate `AploTrustProfile.h` with the [optional AploEmbed tool](https://github.com/AploCoin/AploEmbed/blob/master/docs/tls-trust.md#offline-builds-and-ca-updates) and place it in `include/`. Its URLs and CA values override the manual RPC fields.
-
-## Build and upload
-
-~~~sh
-pio run
-pio run -t upload
-pio device monitor -b 115200
-~~~
-
-PlatformIO fetches the pinned [AploEmbed](https://github.com/AploCoin/AploEmbed) and [MiningEmbed](https://github.com/AploCoin/MiningEmbed) commits from GitHub. The Serial prompt accepts only the restricted session key. Keep the owner key on the signing device.
+[Installation and upgrade](../../docs/flash.md) · [USB Serial API](../../docs/serial-api.md)

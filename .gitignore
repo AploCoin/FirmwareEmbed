@@ -1,8 +1,8 @@
 .pio/
 .pio-core/
 .vscode/
-include/DeviceConfig.h
 *.bin
 *.elf
 compile_commands.json
 .local/
+__pycache__/
