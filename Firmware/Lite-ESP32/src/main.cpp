@@ -8,6 +8,9 @@
 #include "DeviceConfig.h"
 #include "SigningLatch.h"
 
+// The synchronous TLS path and transaction reconciliation share this task.
+SET_LOOP_TASK_STACK_SIZE(12 * 1024)
+
 namespace {
 SigningLatch latch;
 aplo::SessionKey key;
@@ -97,7 +100,6 @@ void loop() {
         clockStarted = true;
     }
     if (time(nullptr) < 1700000000) { delay(10); return; }
-    // Allocate the ESP8266 BearSSL client only after DHCP has completed.
     if (!miner && !startMiner()) { halt(F("Invalid key, authorization or HTTPS trust")); return; }
     if (int32_t(millis() - nextStep) < 0) { delay(1); return; }
     miningembed::Submission submission;

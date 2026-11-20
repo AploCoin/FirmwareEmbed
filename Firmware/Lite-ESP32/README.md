@@ -12,6 +12,7 @@ remain unverified.
 (978,944 bytes), and `aplo_latch` (data subtype `0x40`) at `0xff000` (4 KiB).
 ECC precomputation is disabled to save flash; signing uses the same validated
 scalar implementation as ESP8266. The optional Full RPC worker is omitted.
+The Arduino loop reserves a 12 KiB task stack for TLS and reconciliation.
 
 Build from this standalone folder:
 

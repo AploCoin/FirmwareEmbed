@@ -8,6 +8,11 @@ Flash/static RAM and the sector-rounded size of the actual binary. The manifest
 reports per-profile resources. The source archive contains the three exact Git
 trees used by CI, and SHA256SUMS covers the archive and firmware assets.
 
+For each Lite profile, CI also compiles both wallet modes with a valid public
+root CA and synthetic configuration. The manifest's `configuredBuilds` field
+reports padded binary bytes and static RAM separately. Only the inactive
+template enters the release asset directory.
+
 TLS regression fixtures cover delayed connections, bounded response writes and
 reads, partial responses, deadlines, and failover. ESP32 Full pumps limited
 read-only APLO1 replies on the caller during the TLS worker's wait. ESP8266 Full

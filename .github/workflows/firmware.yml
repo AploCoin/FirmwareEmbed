@@ -75,6 +75,7 @@ jobs:
         run: |
           python3 "$GITHUB_WORKSPACE/AploEmbed/tests/run_native.py"
           python3 "$GITHUB_WORKSPACE/AploEmbed/tests/test_tls_trust.py" --quiet
+          python3 "$GITHUB_WORKSPACE/AploEmbed/tests/test_static_regressions.py"
           python3 "$GITHUB_WORKSPACE/MiningEmbed/tests/run.py" --aploembed "$GITHUB_WORKSPACE/AploEmbed"
       - name: Provisioning and storage regressions
         run: python3 tests/storage/run.py
@@ -122,6 +123,7 @@ jobs:
         env:
           BOARD: ${{ matrix.id }}
           BOARD_DIRECTORY: ${{ matrix.directory }}
+          EDITION: ${{ matrix.edition }}
           SDK_SHA: ${{ needs.projects.outputs.sdk }}
           MINING_SHA: ${{ needs.projects.outputs.mining }}
           APLO_RELEASE_VERSION: ${{ needs.projects.outputs.version }}
@@ -133,6 +135,10 @@ jobs:
           python3 scripts/artifacts.py stage --project "$BOARD_DIRECTORY" --environment "$BOARD" --version "$APLO_RELEASE_VERSION" \
             --build "$project/.pio/build/$BOARD" --log "$RUNNER_TEMP/build.log" \
             --packages "$HOME/.platformio/packages" --output "$RUNNER_TEMP/$BOARD"
+          if [[ "$EDITION" == lite ]]; then
+            python3 scripts/check_lite_capacity.py --project "$project" --environment "$BOARD" \
+              --ca /etc/ssl/certs/ISRG_Root_X1.pem --output "$RUNNER_TEMP/$BOARD"
+          fi
       - uses: actions/upload-artifact@v6
         with:
           name: board-${{ matrix.id }}
