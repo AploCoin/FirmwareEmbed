@@ -311,13 +311,8 @@ renaming it. Both backends verify readback before acknowledging a write.
 On ESP8266 the firmware can format only an entirely erased, linker-verified
 LittleFS region. An unmountable nonblank region locks the store.
 
-Boot migrates the newest combined schema-1 record. It writes the separate journal
-first, preserving the exact pending bytes, then activates schema 2 in the alternate
-config slot. Reboot during migration resumes from the matching bootstrap journal.
+At boot, the firmware loads the most recent complete record of each slot pair.
 Missing or corrupted committed records, unknown schemas and nonconsecutive
-generations lock the store. Uncommitted temporary files are ignored.
-The old reader rejects schema 2 to prevent stale configuration and nonce reuse.
-Use the USB update procedure for manual rollback within the same compatible
-storage schema. Restoring a pre-migration image and snapshot requires external
-reconciliation of all transactions first. Legacy compile-time or RAM-only
-configuration remains outside these formats.
+generations lock the store. Uncommitted temporary files are ignored. Use the
+USB Update procedure with a compatible layout and storage schema. Preserve
+the transaction journal during firmware writes.

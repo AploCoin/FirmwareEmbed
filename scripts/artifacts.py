@@ -11,6 +11,7 @@ import struct
 from pathlib import Path
 
 SECTOR = 4096
+SCHEMA = 3
 LIBRARIES = {"AploEmbed", "MiningEmbed"}
 SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -27,6 +28,7 @@ class Project:
     layout: str
     ram_budget: int | None
     supported: bool = True
+    edition: str = "full"
 
 
 def config_for(path):
@@ -53,9 +55,12 @@ def read_project(path, environment=None):
     start, length, flash = (int(release[key], 0) for key in ("storage_offset", "storage_size", "flash_bytes"))
     if start <= 0 or length <= 0 or start % SECTOR or length % SECTOR or start + length > flash:
         raise ValueError(f"{path}: invalid storage range")
+    edition = release.get("edition", "full")
+    if edition not in {"full", "lite"}:
+        raise ValueError(f"{path}: invalid firmware edition")
     return Project(board, path, release["chip"], consoles, flash, int(release["bootloader_offset"], 0), start, length,
                    release["layout"], int(release["static_ram_budget"]) if "static_ram_budget" in release else None,
-                   release.get("supported", "true").lower() == "true")
+                   release.get("supported", "true").lower() == "true", edition)
 
 
 def projects(directory, include_unsupported=False):
@@ -66,8 +71,10 @@ def projects(directory, include_unsupported=False):
     return [p for p in profiles if include_unsupported or p.supported]
 
 
-def matrix(directory):
-    return {"include": [{"id": p.id, "directory": str(p.path)} for p in projects(directory)]}
+def matrix(directory, diagnostic=False):
+    return {"include": [{"id": p.id, "directory": str(p.path), "edition": p.edition}
+                        for p in projects(directory, include_unsupported=True)
+                        if p.supported != diagnostic]}
 
 
 def write_json(path, data):
@@ -95,7 +102,7 @@ def measure(log, project):
     sizes = {}
     for region, used, capacity in re.findall(r"(RAM|Flash):\s*\[[^\]]*\].*?\(used (\d+) bytes from (\d+) bytes\)", log.read_text(encoding="utf-8")):
         used, capacity = int(used), int(capacity)
-        limit = capacity * 9 // 10
+        limit = capacity if region == "Flash" and project.edition == "lite" else capacity * 9 // 10
         if region == "RAM" and project.ram_budget is not None:
             limit = min(limit, project.ram_budget)
         if not 0 < used <= limit:
@@ -110,10 +117,9 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def partitions(path):
+def partition_entries(packed):
     entries = {}
-    packed = path.read_bytes()
-    if len(packed) % 32:
+    if not packed or len(packed) % 32:
         raise ValueError("truncated partition table")
     for offset in range(0, len(packed), 32):
         magic, kind, subtype, start, length, name, _ = struct.unpack_from("<HBBII16sI", packed, offset)
@@ -126,6 +132,20 @@ def partitions(path):
     return entries
 
 
+def expected_esp32_map(edition, start, size):
+    entries = {"nvs": (1, 2, 0x9000, 0x5000),
+               "factory": (0, 0, 0x10000, start - 0x10000)}
+    if edition == "lite":
+        entries.update({"phy_init": (1, 1, 0xe000, SECTOR), "aplo_latch": (1, 0x40, start, size)})
+    else:
+        entries["aplo_cfg"] = (1, 2, start, size)
+    return entries
+
+
+def lite_marker(layout):
+    return ("APLO-LITE-LAYOUT:" + layout).encode("ascii") + b"\0"
+
+
 def stage(project, build, log, packages, output, version="dev"):
     if not project.supported:
         raise ValueError("unsupported diagnostic profiles cannot produce release artifacts")
@@ -133,6 +153,10 @@ def stage(project, build, log, packages, output, version="dev"):
     expected_identity = {"board": project.id, "version": version, "layout": project.layout,
                          "flashBytes": project.flash_bytes,
                          "storage": {"offset": project.config_offset, "size": project.config_bytes}}
+    if project.edition == "lite":
+        expected_identity["templateBinary"] = True
+        if identity.get("templateBinary") is not True:
+            raise ValueError("personal Lite builds cannot be distributed")
     if identity != expected_identity:
         raise ValueError("build identity differs from staged board/version/layout")
     sizes = measure(log, project)
@@ -142,22 +166,24 @@ def stage(project, build, log, packages, output, version="dev"):
         end = offset + (length + SECTOR - 1) // SECTOR * SECTOR
         if offset % SECTOR or not length or end > limit:
             raise ValueError(f"{project.id}/{kind} exceeds its sector-bounded flash range")
-        asset = output / f"{project.id}-{kind}.bin"
+        target = project.id.removeprefix(project.edition + "-")
+        asset = output / f"firmwareembed-{project.edition}-{target}-{kind}.bin"
         shutil.copyfile(image, asset)
         return {"path": asset.name, "offset": offset, "size": length, "sha256": digest(asset)}
     if project.chip == "ESP8266":
         if project.boot_offset:
             raise ValueError("ESP8266 image must start at zero")
-        application = part("firmware", build / "firmware.bin", 0, min(project.config_offset, sizes["flash"]["capacity"]))
+        limit = project.config_offset
+        if project.edition == "full":
+            limit = min(limit, sizes["flash"]["capacity"])
+        application = part("firmware", build / "firmware.bin", 0, limit)
         install = [application]
     else:
         table = build / "partitions.bin"
-        entries = partitions(table)
-        factory = entries.get("factory")
-        if set(entries) != {"nvs", "factory", "aplo_cfg"} or not factory or factory != (0, 0, 0x10000, project.config_offset - 0x10000):
-            raise ValueError(f"{project.id}: expected one factory application and no OTA partitions")
-        if entries["nvs"] != (1, 2, 0x9000, 0x5000) or entries["aplo_cfg"] != (1, 2, project.config_offset, project.config_bytes):
-            raise ValueError(f"{project.id}: unexpected NVS layout")
+        entries = partition_entries(table.read_bytes())
+        if entries != expected_esp32_map(project.edition, project.config_offset, project.config_bytes):
+            raise ValueError(f"{project.id}: expected the declared factory and storage map with no OTA partitions")
+        factory = entries["factory"]
         if factory[3] != sizes["flash"]["capacity"]:
             raise ValueError("partition capacity differs from measured build capacity")
         application = part("firmware", build / "firmware.bin", factory[2], project.config_offset)
@@ -167,13 +193,18 @@ def stage(project, build, log, packages, output, version="dev"):
         end = image["offset"] + (image["size"] + SECTOR - 1) // SECTOR * SECTOR
         if end > project.flash_bytes or image["offset"] < project.config_offset + project.config_bytes and end > project.config_offset:
             raise ValueError(f"{project.id}: write or erase overlaps configuration or physical flash")
+    lite = project.edition == "lite"
+    if lite and lite_marker(project.layout) not in (build / "firmware.bin").read_bytes():
+        raise ValueError(f"{project.id}: missing Lite application layout marker")
     write_json(output / f"{project.id}.json", {
         "id": project.id, "version": version, "chipFamily": project.chip,
+        "edition": project.edition, "hardwareStatus": "experimental",
+        "configuration": "build-time" if lite else "serial", "templateBinary": lite,
         "serialType": project.consoles[0], "serialTypes": list(project.consoles),
         "flashBytes": project.flash_bytes, "layout": project.layout,
         "storage": {"offset": project.config_offset, "size": project.config_bytes},
-        "storageSchema": 2, "readableStorageSchemas": [1, 2], "ota": False,
-        "install": install, "migrate": install, "update": [application], "resources": sizes,
+        "storageSchema": 1 if lite else 2, "readableStorageSchemas": [1] if lite else [1, 2],
+        "ota": False, "install": install, "update": [application], "resources": sizes,
     })
 
 
@@ -190,8 +221,10 @@ def assemble(directory, staged, output, version, libraries):
         if profile["id"] != project.id or profile["version"] != version or profile["layout"] != project.layout:
             raise ValueError(f"{project.id}: staged identity/version/layout mismatch")
         if (profile["chipFamily"] != project.chip or profile["flashBytes"] != project.flash_bytes
+                or profile.get("edition") != project.edition
+                or profile.get("templateBinary") != (project.edition == "lite")
                 or profile["storage"] != {"offset": project.config_offset, "size": project.config_bytes}
-                or profile.get("ota") is not False or profile["migrate"] != profile["install"]
+                or profile.get("ota") is not False
                 or len(profile["update"]) != 1 or profile["update"][0] not in profile["install"]
                 or profile["update"][0]["offset"] != (0 if project.chip == "ESP8266" else 0x10000)):
             raise ValueError(f"{project.id}: staged profile violates USB update contract")
@@ -204,8 +237,12 @@ def assemble(directory, staged, output, version, libraries):
             published.append(destination)
         profiles.append(profile)
     manifest = output / "manifest.json"
-    write_json(manifest, {"schemaVersion": 2, "name": "FirmwareEmbed", "version": version,
-                         "eraseAll": False, "ota": False, "profiles": profiles, "libraries": libraries})
+    excluded = [{"id": p.id, "edition": p.edition, "chipFamily": p.chip,
+                 "flashBytes": p.flash_bytes, "reason": "capacity"}
+                for p in projects(directory, include_unsupported=True) if not p.supported]
+    write_json(manifest, {"schemaVersion": SCHEMA, "name": "FirmwareEmbed", "version": version,
+                         "eraseAll": False, "ota": False, "profiles": profiles,
+                         "excludedProfiles": excluded, "libraries": libraries})
     published.append(manifest)
     (output / "SHA256SUMS").write_text("".join(f"{digest(p)}  {p.name}\n" for p in sorted(published)), encoding="ascii")
 
@@ -224,6 +261,7 @@ def main():
     release.add_argument("--version", required=True)
     discover = sub.add_parser("matrix")
     discover.add_argument("--projects", type=Path, required=True)
+    discover.add_argument("--diagnostic", action="store_true")
     pin = sub.add_parser("pin")
     pin.add_argument("--project", type=Path, required=True)
     pin.add_argument("--lock", type=Path, required=True)
@@ -235,7 +273,7 @@ def main():
     elif args.command == "pin":
         pin_project(args.project, read_lock(args.lock))
     else:
-        print(json.dumps(matrix(args.projects)))
+        print(json.dumps(matrix(args.projects, args.diagnostic)))
 
 if __name__ == "__main__":
     main()

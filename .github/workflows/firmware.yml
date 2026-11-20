@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       boards: ${{ steps.matrix.outputs.boards }}
+      diagnostics: ${{ steps.matrix.outputs.diagnostics }}
       sdk: ${{ steps.matrix.outputs.sdk }}
       mining: ${{ steps.matrix.outputs.mining }}
       version: ${{ steps.matrix.outputs.version }}
@@ -25,6 +26,7 @@ jobs:
         shell: bash
         run: |
           boards="$(python3 scripts/artifacts.py matrix --projects Firmware)"
+          diagnostics="$(python3 scripts/artifacts.py matrix --projects Firmware --diagnostic)"
           sdk="$(python3 -c 'import json; print(json.load(open("dependencies.lock.json"))["AploEmbed"])')"
           mining="$(python3 -c 'import json; print(json.load(open("dependencies.lock.json"))["MiningEmbed"])')"
           version="git-${GITHUB_SHA:0:12}"
@@ -33,7 +35,7 @@ jobs:
             version="${GITHUB_REF_NAME#v}"
           fi
           [[ "$sdk" =~ ^[0-9a-f]{40}$ && "$mining" =~ ^[0-9a-f]{40}$ ]]
-          printf 'boards=%s\nsdk=%s\nmining=%s\nversion=%s\n' "$boards" "$sdk" "$mining" "$version" >> "$GITHUB_OUTPUT"
+          printf 'boards=%s\ndiagnostics=%s\nsdk=%s\nmining=%s\nversion=%s\n' "$boards" "$diagnostics" "$sdk" "$mining" "$version" >> "$GITHUB_OUTPUT"
 
   native:
     runs-on: ubuntu-latest
@@ -76,10 +78,30 @@ jobs:
           python3 "$GITHUB_WORKSPACE/MiningEmbed/tests/run.py" --aploembed "$GITHUB_WORKSPACE/AploEmbed"
       - name: Provisioning and storage regressions
         run: python3 tests/storage/run.py
+      - name: Lite journal power-cut regressions
+        run: |
+          python3 Firmware/Lite-ESP8266/tests/run_latch.py
+          python3 Firmware/Lite-ESP32/tests/run_latch.py
+          python3 Firmware/Lite-ESP8266/tests/run_image_gate.py
+          python3 Firmware/Lite-ESP32/tests/run_image_gate.py
       - name: Artifact and USB flasher regressions
         run: python3 tests/artifacts_test.py
       - name: Host configurator regressions
         run: python3 tests/configure_test.py
+      - name: Archive the exact source trees
+        shell: bash
+        run: |
+          bundle="$RUNNER_TEMP/sources"
+          mkdir -p "$bundle"
+          for repository in FirmwareEmbed AploEmbed MiningEmbed; do
+            git -C "$GITHUB_WORKSPACE/$repository" archive --prefix="$repository/" HEAD | tar -xf - -C "$bundle"
+          done
+          tar -C "$bundle" -czf "$RUNNER_TEMP/sources.tar.gz" FirmwareEmbed AploEmbed MiningEmbed
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-sources
+          path: ${{ runner.temp }}/sources.tar.gz
+          if-no-files-found: error
 
   boards:
     runs-on: ubuntu-latest
@@ -122,12 +144,7 @@ jobs:
     needs: projects
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: esp01-512k
-            directory: Firmware/ESP8266
-          - id: esp32dev-1m
-            directory: Firmware/ESP32
+      matrix: ${{ fromJSON(needs.projects.outputs.diagnostics) }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -169,6 +186,10 @@ jobs:
           path: >-
             ${{ fromJSON(needs.projects.outputs.boards).include[1] && 'staged' ||
                 format('staged/board-{0}', fromJSON(needs.projects.outputs.boards).include[0].id) }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-sources
+          path: sources
       - name: Generate the release manifest and checksums
         shell: bash
         env:
@@ -178,6 +199,12 @@ jobs:
           for directory in staged/board-*; do mv "$directory" "staged/${directory#staged/board-}"; done
           python3 scripts/artifacts.py assemble --projects Firmware --staged staged --output release \
             --version "${{ needs.projects.outputs.version }}" --lock dependencies.lock.json
+          mv sources/sources.tar.gz release/sources.tar.gz
+          (cd release && sha256sum sources.tar.gz >> SHA256SUMS)
+          if [[ -f "docs/releases/v${{ needs.projects.outputs.version }}.md" ]]; then
+            cp "docs/releases/v${{ needs.projects.outputs.version }}.md" release/RELEASE-NOTES.md
+            (cd release && sha256sum RELEASE-NOTES.md >> SHA256SUMS)
+          fi
           (cd release && sha256sum -c SHA256SUMS)
       - uses: actions/upload-artifact@v6
         with:
@@ -199,4 +226,11 @@ jobs:
       - name: Publish the verified tag and release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+        shell: bash
+        run: |
+          notes=(--generate-notes)
+          if [[ -f release/RELEASE-NOTES.md ]]; then
+            notes=(--notes-file release/RELEASE-NOTES.md)
+          fi
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "FirmwareEmbed $GITHUB_REF_NAME" "${notes[@]}"

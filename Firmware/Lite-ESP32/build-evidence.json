@@ -1,0 +1,30 @@
+{
+  "status": "experimental; physical device unverified",
+  "localDependencies": "current local AploEmbed and MiningEmbed source checkouts",
+  "profiles": {
+    "session": {
+      "staticRamBytes": 46412,
+      "linkerFlashBytes": 971345,
+      "binaryBytes": 977920,
+      "fixture": "Synthetic scalar 1, .invalid HTTPS endpoint, 1939-byte public ISRG Root X1 CA; never deployed"
+    },
+    "direct": {
+      "staticRamBytes": 46412,
+      "linkerFlashBytes": 971345,
+      "binaryBytes": 977920,
+      "fixture": "Synthetic scalar 1, .invalid HTTPS endpoint, 1939-byte public ISRG Root X1 CA; never deployed"
+    },
+    "starter": {
+      "staticRamBytes": 46412,
+      "linkerFlashBytes": 969261,
+      "binaryBytes": 975840,
+      "fixture": "Public unarmed zero-key template; no private header"
+    }
+  },
+  "appCapacityBytes": 978944,
+  "latchTests": "PASS: 4096 residue positions, 97 torn writes, 4097 torn clears, read failure; host model only",
+  "cryptoTests": "PASS: AploEmbed/tests/run_native.py ASan/UBSan, USE_PRECOMPUTED_CP=0; independent RLP decode",
+  "imageGateTests": "PASS: exact capacity, missing marker, padded overflow",
+  "bothModeConstructorsLinked": true,
+  "sourceEvidence": "Both mining constructors and full-width parser symbols verified in public starter ELF; no provisioning or LittleFS symbols linked"
+}

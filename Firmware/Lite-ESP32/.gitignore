@@ -1,0 +1,4 @@
+.pio/
+.platformio-local.ini
+include/DeviceConfig.private.h
+*.bin
