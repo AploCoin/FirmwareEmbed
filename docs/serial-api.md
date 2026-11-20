@@ -185,9 +185,11 @@ hash; no raw signed bytes are exposed. State tokens accepted from runtime are
 `session_expired`, `budget_exceeded`, `insufficient_funds`, `not_staked`, `cooldown`,
 `recovery_required`, `sign_failed`, `random_unavailable`, `setup`, `time`, `ready`,
 `disabled`, `error`, `storage`, `connecting` and `offline`; all others become `other`.
+When `locked=1`, the journal could not be trusted. Treat `journal=NONE` in
+that condition as unavailable evidence for an erase or restore.
 
 Send `APLO1 21 DIAG` to sample board diagnostics before provisioning or while mining.
-It is available without authentication and returns numeric fields:
+It is available without authentication and returns numeric fields.
 
 ```text
 APLO1 21 OK diag reset_reason=3 uptime_ms=1024 cpu_mhz=160 flash_bytes=4194304 psram_bytes=0 heap_free=28256 heap_largest=28040
@@ -198,9 +200,65 @@ hardware watchdog reset and 3 is a software watchdog reset. `uptime_ms` is the
 32-bit uptime counter. The heap values report the free bytes and largest free
 allocation block at the time of the request. A board without PSRAM reports zero.
 
+## Read-only queries
+
+The new queries keep the APLO1 envelope and use fixed-order `key=value` fields.
+The configurator exposes them as `info`, `config`, `mining-stats`, `wallet-info`
+and `network-status`.
+
+| Command | Reply label | Fields |
+| --- | --- | --- |
+| `GET_INFO` | `info` | `version`, `board`, `layout`, actual `flash_bytes`, `profile_flash_bytes`, `storage_offset`, `storage_size`, `storage_schema` |
+| `GET_CONFIG` | `config` | `mode`, `enabled`, `chain_id`, `expiry`, `gaplo_budget`, `ssid_set`, `primary_set`, `fallback_set`, `primary_ca_set`, `fallback_ca_set`, `scheduler` |
+| `GET_WALLET_INFO` | `wallet` | `address` (owner), `signer`. A missing address is `-` |
+| `GET_NETWORK_STATUS` | `network` | `wifi` (inactive/connecting/connected), `clock_ready`, `rpc` (idle/busy/primary/fallback/unavailable) |
+| `GET_MINING_STATS` | `stats` | `hashes`, `hashes_per_second`, `active_hashes_per_second`, `batch`, `confirmed`, `reverted` |
+
+For example, run `python3 scripts/configure.py --port /dev/ttyUSB0 info`.
+Numbers are decimal. A budget without a numeric value appears as `-`. The
+configuration query returns presence flags for Wi-Fi and RPC settings. It exposes
+no Wi-Fi credential, endpoint URL, certificate, Operator verifier, key or raw
+transaction. The wallet query returns the public owner and signer addresses only.
+
+Mining counters are per boot. `hashes` counts actual candidate hashes, excluding
+checks for signing or validation. `hashes_per_second` uses wall time, including
+network waits, cooldown and journal recovery. `active_hashes_per_second` measures
+the most recent hash slice. `batch` is the next adaptive slice size.
+`confirmed` and `reverted` count journal resolutions. Legacy `hashes_per_step`
+seeds the adaptive scheduler and `interval_ms` limits the error/cooldown poll rate.
+Hashing itself has no fixed interval. The scheduler targets about 6 ms per slice.
+Read-only requests can run while reading an RPC response. Mutating commands wait
+for the mining step to return. Core TCP/TLS handshakes remain synchronous and can
+delay Serial responses.
+
+## Recover a lost Operator token
+
+Recovery requires a fresh signature by the configured **owner**. In Direct mode it
+is the address derived from the imported key. In Session mode an authorized session
+key alone cannot rotate the Operator token. Use a separate signer holding the owner
+key. An enrolled board without a configured owner cannot prove ownership using
+this API.
+
+1. Generate a new random nonzero 32-byte token on the trusted USB host. Compute
+   `SHA256("FirmwareEmbed/Operator/v1" || token_bytes)`.
+2. Send `APLO1 <id> RECOVERY_CHALLENGE <verifier-hex>`. The board returns
+   `OK recovery_challenge digest=<32-byte-hex> owner=<0x-address>`.
+3. Verify the displayed owner and sign the exact digest with secp256k1. The
+   compact signature is `r[32] || s[32] || recovery_id[1]`, with low S and
+   recovery ID 0 or 1. Use raw digest signing without an Ethereum message prefix.
+4. Send `APLO1 <id> RECOVER <signature-hex>` over the same console within
+   120 seconds. The challenge permits one attempt and is bound to the candidate
+   verifier, wallet and current configuration generation. The CLI subcommand
+   `recover` prompts for the new token and signature with hidden input.
+
+Successful recovery rotates only the Operator verifier and restarts. Configuration,
+mining key and any pending transaction survive. It never writes or discards the
+journal. If no owner key is available, reconcile the journal on the correct chain
+before any external flash restore or erase. For a board that never received a
+wallet, confirm the journal is empty before starting a new installation.
+
 While a transaction is pending, authenticated BEGIN/SET/CA/COMMIT may repair Wi-Fi,
-CA roots, NTP, polling settings or the Operator verifier. The journal is copied
-unchanged into the same atomic snapshot. COMMIT rejects any change to mode,
+CA roots, NTP, polling settings or the Operator verifier. The separate journal stays unchanged. COMMIT rejects any change to mode,
 key/presence, owner, signer, chain, expiry, GAPLO budget, enabled flag or either RPC
 URL. This allows certificate/network repair without losing transaction evidence.
 The original pending record is recovered after restart. Serial cannot clear a
@@ -227,64 +285,39 @@ The snapshot SHA-256 detects corruption; it is not an authenticity signature.
 
 Errors are fixed tokens: `framing`, `unavailable`, `enrollment`, `auth`, `memory`,
 `transaction`, `value`, `chunk`, `certificate`, `upload`, `commit`, `reset` and
-`command`. A rejected value is not echoed. After an ambiguous COMMIT/reset response
+`command` and `recovery`. A rejected value is not echoed. After an ambiguous COMMIT/reset response
 loss, restart/reconnect and inspect STATUS before retrying; IDs do not deduplicate
 all commands. Only identical CA chunks have explicit retry semantics.
 
 ## Persistent format and interruption policy
 
-Storage schema is **1**. Both slots contain a complete Config plus optional journal.
-The 52-byte little-endian envelope is magic `APFC`, uint16 schema, uint16 reserved
-(zero), uint64 generation, uint32 payload length, 32-byte SHA-256. The digest covers
-the first 20 header bytes followed by the entire payload. Strings carry uint16
-length prefixes. Payload order follows encode/decode in MiningEmbed's `src/provisioning/DeviceConfig.cpp`;
-booleans and Mode are single bytes, key and verifier are 32 bytes each, expiry and
-nonce are uint64, polling settings uint32. Journal contains nonce, public hash,
-bounded raw signed hex, 32-byte proof and uint256 maximum fee encoded as hex text.
-Raw bytes must hash to the public transaction hash. Total record bound is 16384
-bytes; each PEM is at most 4096, URL 512 in the internal codec, NTP host 253,
-SSID 32, password 64, address 42, decimal metadata 78, raw transaction 514 hex chars.
+Config schema **2** uses the existing `APFC` slots. A separate version-1
+`APFJ` journal has independent slots and generation counters. Both records use
+a 52-byte little-endian envelope with magic, uint16 schema, uint16 reserved,
+uint64 generation, uint32 payload length and a 32-byte SHA-256 checksum.
+The checksum covers the first 20 bytes of the header and the entire payload.
+Config stores the settings and the journal-generation floor for an authorized
+factory reset. A journal record stores a pending flag and, when pending, the
+nonce, hash, exact signed bytes, proof and maximum fee. Signed bytes must hash
+to the saved hash. A journal blob is at most 768 bytes. It is written only when
+a new transaction is staged or an outstanding one is cleared. Repeats and status
+polling write nothing.
 
-ESP32 initializes the dedicated `aplo_cfg` NVS partition, namespace `device`, and
-uses atomic NVS blobs `slot0`/`slot1`. It never calls NVS erase/recovery on errors.
-ESP8266 disables LittleFS autoformat and uses `/aplo0.bin`, `/aplo1.bin` plus an
-uncommitted `/aplo.tmp`. A flushed and closed temp is renamed atomically over the
-inactive slot. The previously committed slot is never removed first. On an
-unmountable FS, first-install formatting is allowed only when bounded geometry
-checks pass and a full scan of the linker-defined `_FS_start`..`_FS_end` region
-finds every byte erased (0xff). Nonblank unreadable flash is preserved and locked.
-Interruption during that first format can leave nonblank unmountable flash, which
-also locks on next boot; it requires deliberate external recovery, never automatic
-reformat. No other flash region is scanned, imported or erased by this driver.
+ESP32 keeps the `aplo_cfg` NVS partition and `device` namespace. It uses
+`slot0`/`slot1` and `journal0`/`journal1` blob keys. ESP8266 uses
+`/aplo0.bin`, `/aplo1.bin`, `/journal0.bin` and `/journal1.bin` in
+LittleFS. LittleFS replaces one slot at a time by flushing a temporary file and
+renaming it. Both backends verify readback before acknowledging a write.
+On ESP8266 the firmware can format only an entirely erased, linker-verified
+LittleFS region. An unmountable nonblank region locks the store.
 
-Boot chooses the newest valid generation. Any committed slot with an unknown
-schema, bad magic, checksum, length, field validation, read failure or nonconsecutive
-generations locks the store. A missing slot also locks any store whose surviving
-generation is newer than the initial enrollment; an older valid slot is not used to silently discard
-potential transaction evidence. Uncommitted `.tmp` files are ignored. Unknown
-schema is never overwritten, and serial reset is unavailable while storage is
-locked. There is no automatic migration: legacy compile-time configuration and
-RAM-only keys stay outside this format and are not imported.
-
-Every mutation writes the inactive slot and verifies exact readback before
-returning success. A failed/ambiguous replace or readback locks this running store.
-Mining must not broadcast after a false journal callback. Power loss before a
-pending commit leaves the old snapshot; after commit it recovers the signed record.
-A lost acknowledgement therefore does not require signing a different transaction.
-Loss during a journal clear may retain the old pending record, which must be
-reconciled again. Generation overflow also refuses writes.
-
-## Verification
-
-Run `python3 tests/storage/run.py` from this repository. The suite builds production
-DeviceConfig/SerialConfig and actual SessionKey, metadata parser, uint256 and crypto
-sources with ASan/UBSan and strict warnings on this workstream's C++ files. It checks
-enrollment/authentication, staged commit and immutable CA lifetime, direct/session
-validation, independent fallback trust, pending persistence/clear, recovery-only
-edits, reset/tombstone/re-enrollment, failed/ambiguous writes and readback, every-byte
-record corruption, truncation, unknown schema, bounds, malformed/partial/overlong
-serial input, timeout/rate-limit behavior, chunk retry/conflict and 4096-byte PEM
-transport. The URL/X.509 parser and flash driver boundaries are host doubles in
-this suite; actual platform builds and SDK TLS tests are separate coordinator
-checks. No host result demonstrates real flash endurance, physical power-loss
-behavior, USB timing, heap sufficiency or live mining on hardware.
+Boot migrates the newest combined schema-1 record. It writes the separate journal
+first, preserving the exact pending bytes, then activates schema 2 in the alternate
+config slot. Reboot during migration resumes from the matching bootstrap journal.
+Missing or corrupted committed records, unknown schemas and nonconsecutive
+generations lock the store. Uncommitted temporary files are ignored.
+The old reader rejects schema 2 to prevent stale configuration and nonce reuse.
+Use the USB update procedure for manual rollback within the same compatible
+storage schema. Restoring a pre-migration image and snapshot requires external
+reconciliation of all transactions first. Legacy compile-time or RAM-only
+configuration remains outside these formats.

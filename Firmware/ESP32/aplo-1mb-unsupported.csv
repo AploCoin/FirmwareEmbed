@@ -1,0 +1,4 @@
+# Diagnostic only: complete firmware cannot fit this 1 MiB map.
+nvs, data, nvs, 0x9000, 0x5000,
+factory, app, factory, 0x10000, 0xd0000,
+aplo_cfg, data, nvs, 0xe0000, 0x10000,

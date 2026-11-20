@@ -1,23 +1,54 @@
-# Installation and firmware updates
+# USB installation, updates and rollback
 
-Choose the exact PlatformIO board profile. ESP32 DevKit and WROOM-32U both identify as ESP32 over USB, so chip-family discovery alone cannot select the profile. The ESP32-C3 image supports the DevKitM-1 built-in USB-to-UART bridge and native USB Serial/JTAG on boards with that connector. [ESP32-C3 profile](../Firmware/ESP32-C3/README.md)
+Select an exact board profile and its actual flash size. ESP32 DevKit and WROOM-32U both identify as ESP32; chip-family detection cannot distinguish those boards. ESP-01 and ESP-01S labels also do not prove flash capacity. Read the chip's flash ID before choosing a profile. [Supported maps and hardware limits](compatibility.md)
 
-## First v1.0 installation
+The application has no OTA updater. ESP32 uses one `factory` application at `0x10000`, without `otadata`, OTA slots or `boot_app0.bin`. ESP8266 writes its application at `0`. The configuration and pending-transaction journal occupy a separate preserved storage region.
 
-Use the selected profile's `install` parts from `manifest.json`. The ESP32 profiles include bootloader, partition table and OTA selector alongside the application. ESP8266 uses the application at offset 0 and initializes LittleFS on a provably erased filesystem region. Both modes are in the same application binary. For a local source build, run `pio run -t upload` inside the selected board folder.
+## First installation
 
-The pre-v1 firmware used build-time settings and held the session key and transaction state in RAM. Move Wi-Fi, RPC/CA and approved key settings into the [USB configurator](serial-api.md) and reconcile any old outstanding share on the owner machine before enabling mining. First v1.0 installation on ESP32 adds a dedicated 64 KiB `aplo_cfg` NVS partition at `0x290000` (4 MB) or `0xc90000` (16 MB), from the start of the stock SPIFFS area. The old mining firmware left that area available. Apply the partition table only to the matching board and flash size. ESP8266 keeps the 4 MB `eagle.flash.4m1m.ld` map. Preserve any existing filesystem data separately if the device previously ran unrelated firmware.
+Build from a standalone folder with `pio run -e <environment>`, or use that profile's `install` parts in release `manifest.json`. For a local USB upload, run `pio run -e <environment> -t upload` inside the folder. ESP32 install writes the bootloader, partition table and factory application. ESP8266 install writes the application only. A blank device initializes its storage on first boot; a nonblank unreadable store fails closed.
 
-## Configuration-preserving v1.x updates
+A new installation onto unrelated firmware needs its previous data backed up and storage cleared deliberately before provisioning. The supplied updater never runs a whole-chip erase or formats a nonblank unreadable store. Installing a firmware image does not authorize discarding an outstanding transaction.
 
-Use the same profile and flash layout with `eraseAll: false` and that profile's `update` parts. Validate the SHA-256 for each part before writing. Update writes only the application at `0x10000` (ESP32 profiles, stock FirmwareEmbed app0 boot configuration) or `0` (ESP8266). Keep the bootloader, partition table, OTA selector and configuration region in place. A device set to boot an alternate ESP32 OTA slot needs its boot configuration reconciled before following this update path.
+Use the manifest-aware USB service for installs, updates and migrations. Generic ESP Web Tools descriptors are not release assets: a generic new install can erase the chip, and ESP32 framework images need additional merged-image handling outside this service's verified contract. Do not upload a filesystem image over provisioned ESP8266 storage. [ESP Web Tools installation behavior](https://esphome.github.io/esp-web-tools/)
 
-Schema v1 records are read by compatible images using the same layout. Unrecognized versions and unreadable nonblank stores fail closed. A future storage upgrade must ship a reader for the previous version and write the migrated record atomically before activation. A downgrade needs a reader that supports the current schema.
+## Upgrade from the earlier dual-app ESP32 layout
 
-## Release assets
+Run one explicit migration using `migrate` parts, even when the previous firmware booted from `app0`. Migration writes the new bootloader, factory partition table and application. An application-only write cannot turn an old OTA partition table into a factory layout. Once the factory table is installed, the bootloader selects its factory application and the old OTA selector and `app1` contents are unreferenced. No OTA selector erase is needed.
 
-GitHub Actions builds all profiles, runs native tests, enforces flash/static-RAM budgets, and assembles binaries, manifests and `SHA256SUMS`. A validated version tag `vMAJOR.MINOR[.PATCH]` publishes the assets to its GitHub release after the checks pass. The workflow discovers each board's `platformio.ini`, builds from an isolated copy of that folder and resolves the latest AploEmbed and MiningEmbed revisions once per run. The same pair is used by the test and build jobs and recorded in the manifest.
+The established configuration offsets remain `0x290000` on the 4 MiB ESP32, C3 and WROOM profiles and `0xc90000` on the 16 MiB S3. `0x650000` was the S3's old second application offset, never its configuration offset. Migration does not erase configuration. The new firmware can read a supported legacy configuration record at the same offset and migrate it atomically, preserving pending transaction reconciliation. See [storage architecture](architecture.md).
 
-- `manifest.json` is the versioned flasher index. Select `profiles[].id` explicitly and use only its `install` or `update` list. Each entry gives a relative asset path, byte offset, size and SHA-256. `storage` identifies the flash region that the flasher must preserve. `serialTypes` lists the supported connection types. Each ESP32-C3 connection uses the same set of binaries.
-- `manifest-<board>.json` is a first-install descriptor for ESP Web Tools. Use **Skip erase** to preserve data and use the flasher index's application-only path for v1.x updates. [ESP Web Tools manifest documentation](https://esphome.github.io/esp-web-tools/)
-- `<board>-firmware.bin` is the application for both modes. Other `.bin` assets contain the ESP32 boot/partition components referenced by the install descriptor.
+The migration service accepts `--from-layout esp32-4m-dual-app-v1` on the three established 4 MiB boards, or `--from-layout esp32-s3-16m-dual-app-v1` on S3. This is an explicit statement that the device runs that old FirmwareEmbed map. Unknown maps and moves to smaller flash are separate migrations requiring an exported configuration and reconciled pending state.
+
+## Configuration-preserving application updates
+
+Capture `GET_INFO` from the connected device immediately before flashing, and select the same board and layout. Use its `update` list with `eraseAll: false`. Every update contains exactly one application image. The service validates the board, layout, physical/profile flash size, storage bounds, readable storage schema, each asset's SHA-256 and every sector the write will erase. A mismatched board/layout is rejected. esptool additionally probes the physical chip family and flash size before execution.
+
+Install Python dependencies with `python3 -m pip install 'esptool>=4,<5' pyserial`. Capture device info using the [configurator](serial-api.md), and save its `info ...` output or JSON to `device-info.txt`. Inspect the plan before executing:
+
+```sh
+python3 scripts/flash.py release/manifest.json --profile esp32dev --port /dev/cu.usbserial-DEVICE --device-info device-info.txt
+python3 scripts/flash.py release/manifest.json --profile esp32dev --port /dev/cu.usbserial-DEVICE --device-info device-info.txt --execute
+```
+
+For an established dual-app device's one-time factory migration:
+
+```sh
+python3 scripts/flash.py release/manifest.json --profile esp32dev --port /dev/cu.usbserial-DEVICE --mode migrate --from-layout esp32-4m-dual-app-v1
+```
+
+Add `--execute` after reviewing the plan. For a blank board, select `--mode install`. Close other serial programs before execution. USB boot/download mode and reliable board power are required; an interrupted application update needs another USB write before the application can run. There is no second-image OTA recovery slot.
+
+## Manual rollback and schema changes
+
+A rollback uses a previously saved release manifest and its matching binary files. Use the same application-only service with a fresh `GET_INFO`; it accepts the rollback only when the target declares that it can read the device's current storage schema and uses the exact same board, flash map and storage region. Version ordering alone does not prove compatibility.
+
+Storage schema 2 separates configuration commits from frequent pending-journal writes. A compatible image can migrate schema 1 forward. An older schema-1 image cannot interpret schema 2 and must fail closed. Rolling back to the original dual-app/schema-1 firmware requires the saved matching boot/partition/application assets and an independently reconciled, supported configuration baseline; it is not an application-only rollback. Never restore an old pending snapshot onto a device that may have submitted later transactions. Do not erase the store to bypass a schema error.
+
+## Reproducible release assets
+
+Standalone source folders intentionally fetch current default branches for development. `dependencies.lock.json` fixes exactly one full commit SHA for AploEmbed and one for MiningEmbed for release CI. Update that file only to reviewed commits. The same pair is checked out for native tests, pinned into every isolated board build, and recorded in the release manifest. CI embeds one release version into the firmware and staged profile before assembly. Local builds identify as `dev` unless `APLO_RELEASE_VERSION` is set.
+
+The workflow runs host regressions, compiles the supported matrix, gates static RAM and flash usage, and assembles manifests plus `SHA256SUMS`. `manifest.json` schema 2 contains each profile's `install`, `migrate` and `update` lists, board/version/layout identity, storage/schema compatibility, resource use and SHA-256 for every image. Relative assets must stay beside the manifest. Checksum files detect corruption; obtain the manifest and assets from a trusted release source. Tags matching `vMAJOR.MINOR[.PATCH]` publish only after all configured gates pass. [Workflow](../.github/workflows/firmware.yml)
+
+esptool erases flash in 4096-byte sectors, so both artifact staging and the USB service validate rounded erase ends, not only the file's byte length. The service uses `write_flash --flash_size keep` and never issues `erase_flash`. [esptool 4 basic commands](https://docs.espressif.com/projects/esptool/en/release-v4/esp32/esptool/basic-commands.html)

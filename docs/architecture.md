@@ -14,8 +14,9 @@ GitHub Actions discovers the project and builds a copy of it in isolation.
   and uses the board's flash backend. It has no board selection or partition table.
 - **The board project** chooses the physical console, mounts NVS or LittleFS and
   starts Wi-Fi and SNTP. It applies committed settings at restart and keeps the
-  active CA buffers alive. Synchronous HTTPS calls can delay a Serial reply while
-  a mining step is in progress.
+  active CA buffers alive. The adaptive scheduler gives hashing short slices and services Serial between them.
+  The HTTPS reader services public queries cooperatively. Core handshakes can delay
+  a response.
 
 The USB protocol and `scripts/configure.py` are the same for all boards. The
 physical USB host is trusted during provisioning. Stock images store keys in

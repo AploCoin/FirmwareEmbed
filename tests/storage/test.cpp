@@ -1,7 +1,11 @@
 #include <provisioning/DeviceConfig.h>
 #include <provisioning/SerialConfig.h>
+#include <session/SessionEncoding.h>
 #include <Arduino.h>
 #include <trezor/sha3.h>
+extern "C" {
+#include <trezor/sha2.h>
+}
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -20,8 +24,11 @@ extern "C" uint32_t random32() {
 }
 
 namespace aplo {
-bool SessionPlatformRandom(uint8_t*, size_t) {
-    return false;
+bool SessionPlatformRandom(uint8_t* bytes, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+        bytes[i] = random32() & 255;
+    }
+    return true;
 }
 } // namespace aplo
 
@@ -43,9 +50,10 @@ std::string hex(const std::string& bytes) {
 
 class MemoryFlash : public FlashBackend {
 public:
-    std::string slots[2];
-    bool exists[2] = {};
-    unsigned writes = 0;
+    std::string slots[4];
+    bool exists[4] = {};
+    unsigned writes = 0, configWrites = 0, journalWrites = 0;
+    unsigned failSlot = 4;
     bool mount = true, failBefore = false, failAfter = false, failReadback = false;
 
     bool begin() override {
@@ -65,7 +73,12 @@ public:
 
     bool replace(unsigned slot, const std::string& bytes) override {
         ++writes;
-        if (failBefore) {
+        if (slot < 2) {
+            ++configWrites;
+        } else {
+            ++journalWrites;
+        }
+        if (failBefore || slot == failSlot) {
             return false;
         }
         slots[slot] = bytes;
@@ -185,6 +198,12 @@ void storage() {
     bad.nonce = UINT64_MAX;
     assert(!DeviceConfig::writePending(&bad, &store));
     assert(DeviceConfig::writePending(&p, &store));
+    assert(flash.configWrites == 2 && flash.journalWrites == 3);
+    assert(DeviceConfig::writePending(&p, &store));
+    assert(flash.journalWrites == 3);
+    bad = p;
+    bad.nonce++;
+    assert(!DeviceConfig::writePending(&bad, &store) && flash.journalWrites == 3);
     assert(store.pending()->nonce == 123);
     Config prohibited = store.config();
     prohibited.primaryUrl = "https://changed.invalid";
@@ -197,6 +216,8 @@ void storage() {
     assert(DeviceConfig::writePending(reboot.pending(), &reboot)); // Borrowed self-pointer is safe.
     assert(reboot.pending()->raw == p.raw);
     assert(DeviceConfig::writePending(nullptr, &reboot));
+    assert(flash.configWrites == 2 && flash.journalWrites == 4);
+    assert(DeviceConfig::writePending(nullptr, &reboot) && flash.journalWrites == 4);
     assert(!reboot.pending());
     DeviceConfig cleared(flash);
     assert(cleared.begin() && !cleared.pending() && cleared.ready());
@@ -233,7 +254,7 @@ void faults() {
     DeviceConfig reboot(flash);
     assert(reboot.begin() && reboot.pending());
     // Every byte in a committed record is covered by the schema or checksum.
-    for (unsigned slot = 0; slot < 2; ++slot) {
+    for (unsigned slot = 0; slot < 4; ++slot) {
         for (size_t i = 0; i < flash.slots[slot].size(); ++i) {
             MemoryFlash damaged = flash;
             damaged.slots[slot][i] ^= 0x20;
@@ -252,12 +273,12 @@ void faults() {
         assert(!recovered.begin() && recovered.locked());
     }
     MemoryFlash future = flash;
-    future.slots[1][4] = 2;
+    future.slots[1][4] = 3;
     DeviceConfig unknown(future);
     assert(!unknown.begin());
     unsigned writes = future.writes;
     assert(!unknown.factoryReset(p.hash) && future.writes == writes);
-    for (unsigned slot = 0; slot < 2; ++slot) {
+    for (unsigned slot = 0; slot < 4; ++slot) {
         MemoryFlash missing = flash;
         missing.exists[slot] = false;
         DeviceConfig lost(missing);
@@ -271,6 +292,108 @@ void faults() {
     blank.mount = false;
     DeviceConfig failed(blank);
     assert(!failed.begin() && !failed.enroll(token));
+}
+
+std::string legacyConfig(std::string config, const std::string& journal) {
+    constexpr size_t header = 52;
+    config[4] = 1;
+    config.resize(config.size() - 8);
+    config += journal.substr(header);
+    const uint32_t size = config.size() - header;
+    for (unsigned i = 0; i < 4; ++i) {
+        config[16 + i] = static_cast<char>(size >> (8 * i));
+    }
+    SHA256_CTX ctx;
+    sha256_Init(&ctx);
+    sha256_Update(&ctx, reinterpret_cast<const uint8_t*>(config.data()), 20);
+    sha256_Update(&ctx, reinterpret_cast<const uint8_t*>(config.data() + header), size);
+    sha256_Final(&ctx, reinterpret_cast<uint8_t*>(&config[20]));
+    return config;
+}
+
+void migrateWithPending() {
+    MemoryFlash flash = ready();
+    const auto expected = pending();
+    {
+        DeviceConfig store(flash);
+        assert(store.begin());
+        assert(DeviceConfig::writePending(&expected, &store));
+    }
+    flash.slots[0] = legacyConfig(flash.slots[0], flash.slots[3]);
+    flash.slots[1] = legacyConfig(flash.slots[1], flash.slots[2]);
+    flash.exists[2] = flash.exists[3] = false;
+    for (unsigned stop : {2u, 3u, 0u}) {
+        MemoryFlash interrupted = flash;
+        interrupted.failSlot = stop;
+        DeviceConfig oldBoot(interrupted);
+        assert(!oldBoot.begin() && oldBoot.locked());
+        interrupted.failSlot = 4;
+        DeviceConfig resumed(interrupted);
+        assert(resumed.begin() && resumed.ready() && resumed.authenticate(token));
+        assert(resumed.config().password == "password-secret");
+        assert(resumed.pending() && resumed.pending()->raw == expected.raw);
+        assert(interrupted.slots[0][4] == 2 && interrupted.slots[1][4] == 1);
+        assert(DeviceConfig::writePending(nullptr, &resumed));
+        DeviceConfig secondBoot(interrupted);
+        assert(secondBoot.begin() && !secondBoot.pending());
+    }
+}
+
+std::string responseSignature(const std::string& frame, uint8_t scalar) {
+    const auto start = frame.find("digest=");
+    assert(start != std::string::npos);
+    const auto digest = aplo::detail::decodeHex("0x" + frame.substr(start + 7, 64));
+    assert(digest.size() == 32);
+    uint8_t secret[32] = {}, signature[65] = {};
+    secret[31] = scalar;
+    aplo::SessionKey key;
+    assert(key.Import(secret) && aplo::SessionKey::SignDigest(digest.data(), signature, &key));
+    return hex(std::string(reinterpret_cast<const char*>(signature), sizeof(signature)));
+}
+
+void serialRecovery() {
+    MemoryFlash flash = ready();
+    DeviceConfig store(flash);
+    assert(store.begin());
+    const auto expected = pending();
+    assert(DeviceConfig::writePending(&expected, &store));
+    RuntimeSnapshot snapshot;
+    snapshot.hashes = UINT64_MAX;
+    SerialConfig serial(store, []() -> BoardDiagnostics { return {0, 240, 4194304, 0, 1, 1}; },
+                        &snapshot);
+    Port port;
+    assert(port.run(serial, "APLO1 91 GET_INFO\n").find(" storage_schema=2") != std::string::npos);
+    const auto publicConfig = port.run(serial, "APLO1 92 GET_CONFIG\n");
+    assert(publicConfig.find("scheduler=adaptive") != std::string::npos);
+    assert(publicConfig.find("secret") == std::string::npos && publicConfig.find("FAKE") == std::string::npos);
+    assert(port.run(serial, "APLO1 93 GET_WALLET_INFO\n").find(store.walletAddress()) != std::string::npos);
+    assert(port.run(serial, "APLO1 94 GET_NETWORK_STATUS\n") == "APLO1 94 OK network wifi=inactive clock_ready=0 rpc=idle\n");
+    assert(port.run(serial, "APLO1 95 GET_MINING_STATS\n").find("hashes=18446744073709551615") != std::string::npos);
+    port.out.clear();
+    port.feed("APLO1 96 AUTH " + token + "\n");
+    serial.poll(port, "mining", true);
+    assert(port.out.empty());
+    serial.poll(port, "mining");
+    assert(port.out == "APLO1 96 OK authenticated\n");
+    assert(port.run(serial, "APLO1 97 LOGOUT\n") == "APLO1 97 OK\n");
+    uint8_t verifier[32] = {};
+    assert(DeviceConfig::tokenVerifier(other, verifier));
+    const std::string challenge = "APLO1 98 RECOVERY_CHALLENGE " +
+                                  hex(std::string(reinterpret_cast<const char*>(verifier), 32)) + "\n";
+    auto frame = port.run(serial, challenge);
+    assert(frame.find("owner=" + store.walletAddress()) != std::string::npos);
+    assert(port.run(serial, "APLO1 99 RECOVER " + responseSignature(frame, 2) + "\n") ==
+           "APLO1 99 ERR recovery\n");
+    assert(port.run(serial, "APLO1 99 RECOVER " + responseSignature(frame, 1) + "\n") ==
+           "APLO1 99 ERR recovery\n");
+    testMillis += 5000;
+    frame = port.run(serial, challenge);
+    assert(port.run(serial, "APLO1 99 RECOVER " + responseSignature(frame, 1) + "\n") ==
+           "APLO1 99 OK restart\n");
+    DeviceConfig resumed(flash);
+    assert(resumed.begin() && resumed.authenticate(other) && !resumed.authenticate(token));
+    assert(resumed.pending() && resumed.pending()->hash == expected.hash);
+    assert(flash.journalWrites == 3);
 }
 
 void pendingRepair() {
@@ -519,6 +642,9 @@ void serial() {
 } // namespace
 
 int main() {
+    migrateWithPending();
+    serialRecovery();
+    testMillis = 0;
     storage();
     faults();
     pendingRepair();

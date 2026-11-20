@@ -3,6 +3,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -17,8 +18,10 @@ FIELDS = {
 }
 ERRORS = {
     "framing", "unavailable", "enrollment", "auth", "memory", "transaction",
-    "value", "chunk", "certificate", "upload", "commit", "reset", "command",
+    "value", "chunk", "certificate", "upload", "commit", "reset", "command", "recovery",
 }
+TOKEN = r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}"
+ADDRESS = r"(?:0x[0-9a-fA-F]{40}|-)"
 PUBLIC_REPLIES = {
     "STATUS": re.compile(
         r"status locked=[01] enrolled=[01] ready=[01] pending=[01] restart=[01]"
@@ -28,6 +31,30 @@ PUBLIC_REPLIES = {
         r"diag reset_reason=\d+ uptime_ms=\d+ cpu_mhz=\d+ flash_bytes=\d+"
         r" psram_bytes=\d+ heap_free=\d+ heap_largest=\d+"
     ),
+    "GET_INFO": re.compile(
+        rf"info version={TOKEN} board={TOKEN} layout={TOKEN} flash_bytes=\d+ "
+        r"profile_flash_bytes=\d+ storage_offset=\d+ storage_size=\d+ storage_schema=\d+"
+    ),
+    "GET_CONFIG": re.compile(
+        r"config mode=(?:session|direct|unset) enabled=[01] chain_id=\d+ expiry=\d+ "
+        r"gaplo_budget=(?:\d+|-) ssid_set=[01] primary_set=[01] fallback_set=[01] "
+        r"primary_ca_set=[01] fallback_ca_set=[01] scheduler=adaptive"
+    ),
+    "GET_MINING_STATS": re.compile(
+        r"stats hashes=\d+ hashes_per_second=\d+ active_hashes_per_second=\d+ "
+        r"batch=\d+ confirmed=\d+ reverted=\d+"
+    ),
+    "GET_WALLET_INFO": re.compile(rf"wallet address={ADDRESS} signer={ADDRESS}"),
+    "GET_NETWORK_STATUS": re.compile(
+        r"network wifi=(?:inactive|connecting|connected) clock_ready=[01] "
+        r"rpc=(?:idle|busy|primary|fallback|unavailable)"
+    ),
+    "RECOVERY_CHALLENGE": re.compile(r"recovery_challenge digest=[0-9a-f]{64} owner=0x[0-9a-fA-F]{40}"),
+}
+READ_COMMANDS = {
+    "status": "STATUS", "diag": "DIAG", "info": "GET_INFO", "config": "GET_CONFIG",
+    "mining-stats": "GET_MINING_STATS", "wallet-info": "GET_WALLET_INFO",
+    "network-status": "GET_NETWORK_STATUS",
 }
 HEX32 = re.compile(r"[0-9a-fA-F]{64}")
 
@@ -150,12 +177,23 @@ def apply(connection, fields, certificates):
     connection.request("COMMIT", expected="restart")
 
 
+def recover(connection, token):
+    if bytes.fromhex(token) == bytes(32):
+        raise ProtocolError("choose a nonzero random operator token")
+    verifier = hashlib.sha256(b"FirmwareEmbed/Operator/v1" + bytes.fromhex(token)).hexdigest()
+    print(connection.request("RECOVERY_CHALLENGE", verifier), flush=True)
+    signature = prompt_secret("Owner signature over the exact digest (130 hex chars, no prefix): ")
+    if not re.fullmatch(r"[0-9a-fA-F]{130}", signature):
+        raise ProtocolError("expected a compact 65-byte signature")
+    connection.request("RECOVER", signature, expected="restart")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True, help="USB Serial device")
     parser.add_argument("--timeout", type=float, default=120, help="seconds per reply (default: 120)")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "diag", "enroll"):
+    for name in (*READ_COMMANDS, "enroll", "recover"):
         sub.add_parser(name)
     edit = sub.add_parser("apply", help="stage and commit configuration")
     edit.add_argument("--config", type=Path, help="JSON with public configuration fields")
@@ -178,16 +216,19 @@ def main():
         if args.command == "reset" and not re.fullmatch(r"NONE|0x[0-9a-fA-F]{64}", args.journal):
             raise ProtocolError("journal must be NONE or the exact public transaction hash")
         token = secret("Operator token: ") if args.command in {"apply", "enroll", "reset"} else None
+        new_token = secret("New random operator token: ") if args.command == "recover" else None
         with serial.Serial(baudrate=115200, timeout=0.25, write_timeout=2) as port:
             port.dtr = port.rts = False
             port.port = args.port
             port.open()
             port.reset_input_buffer()
             connection = Connection(port, args.timeout)
-            if args.command in {"status", "diag"}:
-                print(connection.request(args.command.upper()))
+            if args.command in READ_COMMANDS:
+                print(connection.request(READ_COMMANDS[args.command]))
                 return
-            if args.command == "enroll":
+            if args.command == "recover":
+                recover(connection, new_token)
+            elif args.command == "enroll":
                 connection.request("ENROLL", token, "I_HAVE_PHYSICAL_USB_CONTROL", expected="restart")
             else:
                 connection.request("AUTH", token, expected="authenticated")

@@ -1,0 +1,4 @@
+# USB-only reduced-flash layout. Not compatible with a 4 MiB configuration map.
+nvs, data, nvs, 0x9000, 0x5000,
+factory, app, factory, 0x10000, 0x180000,
+aplo_cfg, data, nvs, 0x190000, 0x10000,

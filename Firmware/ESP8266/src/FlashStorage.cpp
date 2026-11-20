@@ -10,21 +10,28 @@ namespace {
 using miningembed::provisioning::DeviceConfig;
 using miningembed::provisioning::FlashBackend;
 
+constexpr const char* paths[] = {"/aplo0.bin", "/aplo1.bin", "/journal0.bin", "/journal1.bin"};
+constexpr uintptr_t flashMapping = 0x40200000;
+
+bool validFilesystemLayout() {
+    const auto start = reinterpret_cast<uintptr_t>(&_FS_start);
+    const auto end = reinterpret_cast<uintptr_t>(&_FS_end);
+    const auto page = reinterpret_cast<uintptr_t>(&_FS_page);
+    const auto block = reinterpret_cast<uintptr_t>(&_FS_block);
+    return ESP.getFlashChipSize() == APLO_FLASH_BYTES &&
+           ESP.getFlashChipRealSize() >= APLO_FLASH_BYTES &&
+           start == flashMapping + APLO_STORAGE_OFFSET &&
+           end == start + APLO_STORAGE_SIZE && APLO_STORAGE_SIZE >= 65536 &&
+           !(start & 4095) && !(end & 4095) && page == 256 &&
+           (block == 4096 || block == 8192) && end - flashMapping <= APLO_FLASH_BYTES;
+}
+
 // Formatting is permitted only for a fully erased linker-defined FS partition.
 bool erasedFilesystem() {
-    const uintptr_t map = 0x40200000;
-    uintptr_t start = reinterpret_cast<uintptr_t>(&_FS_start),
-              end = reinterpret_cast<uintptr_t>(&_FS_end);
-    uintptr_t page = reinterpret_cast<uintptr_t>(&_FS_page),
-              block = reinterpret_cast<uintptr_t>(&_FS_block);
-    if (start < map + 0x10000 || end <= start || end - start < 65536 ||
-        end - start > 2 * 1024 * 1024 || (start & 4095) || (end & 4095) || page != 256 ||
-        (block != 4096 && block != 8192) || end - map > ESP.getFlashChipRealSize() ||
-        end - map > ESP.getFlashChipSize()) {
-        return false;
-    }
+    const auto start = reinterpret_cast<uintptr_t>(&_FS_start) - flashMapping;
+    const auto end = reinterpret_cast<uintptr_t>(&_FS_end) - flashMapping;
     uint32_t words[64];
-    for (uintptr_t offset = start - map; offset < end - map; offset += sizeof(words)) {
+    for (uintptr_t offset = start; offset < end; offset += sizeof(words)) {
         if (!ESP.flashRead(offset, words, sizeof(words))) {
             return false;
         }
@@ -41,9 +48,7 @@ bool erasedFilesystem() {
 class PlatformFlash final : public FlashBackend {
 public:
     bool begin() override {
-        constexpr uint32_t profileFlashBytes = 4 * 1024 * 1024;
-        if (ESP.getFlashChipSize() != profileFlashBytes ||
-            ESP.getFlashChipRealSize() < profileFlashBytes) {
+        if (!validFilesystemLayout()) {
             return false;
         }
         LittleFS.setConfig(LittleFSConfig().setAutoFormat(false));
@@ -54,12 +59,13 @@ public:
     }
 
     Read read(unsigned slot, std::string& bytes) override {
-        const char* path = slot ? "/aplo1.bin" : "/aplo0.bin";
+        const char* path = paths[slot];
         if (!LittleFS.exists(path)) {
             return Read::Missing;
         }
+        const size_t maximum = slot < 2 ? DeviceConfig::MaxRecord : DeviceConfig::MaxJournalRecord;
         File f = LittleFS.open(path, "r");
-        if (!f || f.size() == 0 || f.size() > DeviceConfig::MaxRecord) {
+        if (!f || f.size() == 0 || f.size() > maximum) {
             return Read::Error;
         }
         size_t n = f.size();
@@ -77,11 +83,11 @@ public:
             f.write(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()) == bytes.size();
         f.flush();
         f.close();
-        return ok && LittleFS.rename("/aplo.tmp", slot ? "/aplo1.bin" : "/aplo0.bin");
+        return ok && LittleFS.rename("/aplo.tmp", paths[slot]);
     }
 
     bool verify(unsigned slot, const std::string& expected) override {
-        File f = LittleFS.open(slot ? "/aplo1.bin" : "/aplo0.bin", "r");
+        File f = LittleFS.open(paths[slot], "r");
         if (!f || f.size() != expected.size()) {
             return false;
         }

@@ -17,17 +17,23 @@ jobs:
       boards: ${{ steps.matrix.outputs.boards }}
       sdk: ${{ steps.matrix.outputs.sdk }}
       mining: ${{ steps.matrix.outputs.mining }}
+      version: ${{ steps.matrix.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Discover standalone projects and dependency revisions
+      - uses: actions/checkout@v5
+      - name: Discover standalone projects and locked dependency revisions
         id: matrix
         shell: bash
         run: |
           boards="$(python3 scripts/artifacts.py matrix --projects Firmware)"
-          sdk="$(git ls-remote --exit-code https://github.com/AploCoin/AploEmbed.git HEAD | cut -f1)"
-          mining="$(git ls-remote --exit-code https://github.com/AploCoin/MiningEmbed.git HEAD | cut -f1)"
+          sdk="$(python3 -c 'import json; print(json.load(open("dependencies.lock.json"))["AploEmbed"])')"
+          mining="$(python3 -c 'import json; print(json.load(open("dependencies.lock.json"))["MiningEmbed"])')"
+          version="git-${GITHUB_SHA:0:12}"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+            version="${GITHUB_REF_NAME#v}"
+          fi
           [[ "$sdk" =~ ^[0-9a-f]{40}$ && "$mining" =~ ^[0-9a-f]{40}$ ]]
-          printf 'boards=%s\nsdk=%s\nmining=%s\n' "$boards" "$sdk" "$mining" >> "$GITHUB_OUTPUT"
+          printf 'boards=%s\nsdk=%s\nmining=%s\nversion=%s\n' "$boards" "$sdk" "$mining" "$version" >> "$GITHUB_OUTPUT"
 
   native:
     runs-on: ubuntu-latest
@@ -43,7 +49,7 @@ jobs:
       SDK_SHA: ${{ needs.projects.outputs.sdk }}
       MINING_SHA: ${{ needs.projects.outputs.mining }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: FirmwareEmbed
       - name: Check out the resolved libraries
@@ -70,6 +76,8 @@ jobs:
           python3 "$GITHUB_WORKSPACE/MiningEmbed/tests/run.py" --aploembed "$GITHUB_WORKSPACE/AploEmbed"
       - name: Provisioning and storage regressions
         run: python3 tests/storage/run.py
+      - name: Artifact and USB flasher regressions
+        run: python3 tests/artifacts_test.py
       - name: Host configurator regressions
         run: python3 tests/configure_test.py
 
@@ -82,8 +90,8 @@ jobs:
     env:
       PLATFORMIO_SETTING_ENABLE_TELEMETRY: 'no'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - run: python -m pip install platformio==6.1.19
@@ -94,32 +102,73 @@ jobs:
           BOARD_DIRECTORY: ${{ matrix.directory }}
           SDK_SHA: ${{ needs.projects.outputs.sdk }}
           MINING_SHA: ${{ needs.projects.outputs.mining }}
+          APLO_RELEASE_VERSION: ${{ needs.projects.outputs.version }}
         run: |
           project="$RUNNER_TEMP/project"
           cp -R -- "$BOARD_DIRECTORY" "$project"
-          sed -i -E \
-            -e "s|^([[:space:]]*https://github.com/AploCoin/AploEmbed\.git)$|\1#$SDK_SHA|" \
-            -e "s|^([[:space:]]*https://github.com/AploCoin/MiningEmbed\.git)$|\1#$MINING_SHA|" \
-            "$project/platformio.ini"
+          python3 scripts/artifacts.py pin --project "$project" --lock dependencies.lock.json
           pio run -d "$project" -e "$BOARD" | tee "$RUNNER_TEMP/build.log"
-          python3 scripts/artifacts.py stage --project "$BOARD_DIRECTORY" \
+          python3 scripts/artifacts.py stage --project "$BOARD_DIRECTORY" --environment "$BOARD" --version "$APLO_RELEASE_VERSION" \
             --build "$project/.pio/build/$BOARD" --log "$RUNNER_TEMP/build.log" \
             --packages "$HOME/.platformio/packages" --output "$RUNNER_TEMP/$BOARD"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: board-${{ matrix.id }}
           path: ${{ runner.temp }}/${{ matrix.id }}
           if-no-files-found: error
 
+  limits:
+    runs-on: ubuntu-latest
+    needs: projects
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: esp01-512k
+            directory: Firmware/ESP8266
+          - id: esp32dev-1m
+            directory: Firmware/ESP32
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install platformio==6.1.19
+      - name: Prove excluded flash capacities cannot fit the complete firmware
+        shell: bash
+        env:
+          BOARD: ${{ matrix.id }}
+          BOARD_DIRECTORY: ${{ matrix.directory }}
+          APLO_RELEASE_VERSION: ${{ needs.projects.outputs.version }}
+          PLATFORMIO_SETTING_ENABLE_TELEMETRY: 'no'
+        run: |
+          project="$RUNNER_TEMP/project"
+          cp -R -- "$BOARD_DIRECTORY" "$project"
+          python3 scripts/artifacts.py pin --project "$project" --lock dependencies.lock.json
+          if pio run -d "$project" -e "$BOARD" > "$RUNNER_TEMP/limit.log" 2>&1; then
+            cat "$RUNNER_TEMP/limit.log"
+            echo "Diagnostic profile now fits; review its storage and resource contract before enabling it."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/limit.log"
+          python3 - "$RUNNER_TEMP/limit.log" <<'PYCODE'
+          import pathlib, re, sys
+          log = pathlib.Path(sys.argv[1]).read_text()
+          assert re.search(r"will not fit in region|region .+ overflowed|program size .+ greater than maximum allowed", log, re.I), "failure was not a proven flash-capacity overflow"
+          PYCODE
+
   artifacts:
     runs-on: ubuntu-latest
-    needs: [projects, native, boards]
+    needs: [projects, native, boards, limits]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           pattern: board-*
-          path: staged
+          # A single match is extracted directly into the target directory.
+          path: >-
+            ${{ fromJSON(needs.projects.outputs.boards).include[1] && 'staged' ||
+                format('staged/board-{0}', fromJSON(needs.projects.outputs.boards).include[0].id) }}
       - name: Generate the release manifest and checksums
         shell: bash
         env:
@@ -127,15 +176,10 @@ jobs:
           MINING_SHA: ${{ needs.projects.outputs.mining }}
         run: |
           for directory in staged/board-*; do mv "$directory" "staged/${directory#staged/board-}"; done
-          version="git-${GITHUB_SHA:0:12}"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
-            version="${GITHUB_REF_NAME#v}"
-          fi
           python3 scripts/artifacts.py assemble --projects Firmware --staged staged --output release \
-            --version "$version" --sdk-sha "$SDK_SHA" --mining-sha "$MINING_SHA"
+            --version "${{ needs.projects.outputs.version }}" --lock dependencies.lock.json
           (cd release && sha256sum -c SHA256SUMS)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: FirmwareEmbed
           path: release
@@ -148,7 +192,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: FirmwareEmbed
           path: release
