@@ -10,11 +10,16 @@ AploCoin mining firmware with two modes in one image per board. Set up the devic
 | ESP8266 ESP-12E (4 MB) | `esp12e` | LittleFS |
 | ESP32-S3 N16R8 | `esp32-s3-n16r8` | NVS |
 
-Build from the repository root with PlatformIO Core 6.1.19. The [library lock](libraries.ini) pins the SDK and mining libraries. To build with both libraries as sibling checkouts, use the local configuration.
+Each board folder is a complete PlatformIO project. Copy just that folder and open
+it in PlatformIO, or run `pio run` from inside it. The board's `platformio.ini`
+pins the GitHub revisions of AploEmbed and MiningEmbed, which PlatformIO fetches
+automatically.
 
 ~~~sh
-pio run -e esp12e
-pio run -c platformio-local.ini -e esp12e
+pio run -d Firmware/ESP8266
+git archive --format=zip -o FirmwareEmbed-ESP8266.zip HEAD:Firmware/ESP8266
 ~~~
 
-[Installation, updates and artifacts](docs/flash.md) · [USB Serial API](docs/serial-api.md) · [Mining modes and recovery](docs/sessions.md) · [Architecture](docs/architecture.md) · [Verification](docs/validation.md)
+Use [one host configurator](scripts/configure.py) for all boards.
+
+[Installation, updates and artifacts](docs/flash.md) · [USB Serial API and configurator](docs/serial-api.md) · [Mining modes and recovery](docs/sessions.md) · [Architecture](docs/architecture.md) · [Verification](docs/validation.md)

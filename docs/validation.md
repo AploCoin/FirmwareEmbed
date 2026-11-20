@@ -1,16 +1,16 @@
 # FirmwareEmbed v1.0 verification
 
-The 2026-11-19 local matrix used PlatformIO 6.1.19 and the exact SDK and MiningEmbed commits in [libraries.ini](../libraries.ini). Git resolved the pins from the local repositories. Figures are bytes from PlatformIO's linker size report and from the generated application file.
+The 2026-11-20 local matrix built five detached board folders with PlatformIO 6.1.19, AploEmbed `1f7500a` and MiningEmbed `cce1737`. Figures are bytes from PlatformIO's linker size report and from the generated application file.
 
 | Profile | Flash used / partition capacity | Static RAM used / available | Application image |
 | --- | ---: | ---: | ---: |
-| ESP32 DevKit | 1,037,521 / 1,310,720 | 47,952 / 327,680 | 1,044,096 |
-| ESP32-C3-DevKitM-1 | 1,023,306 / 1,310,720 | 42,060 / 327,680 | 1,065,520 |
-| ESP32-WROOM-32U | 1,037,553 / 1,310,720 | 47,952 / 327,680 | 1,044,128 |
-| ESP8266 ESP-12E | 492,695 / 1,044,464 | 36,012 / 81,920 | 496,848 |
-| ESP32-S3 N16R8 | 989,025 / 6,553,600 | 47,484 / 327,680 | 989,392 |
+| ESP32 DevKit | 1,037,033 / 1,310,720 | 47,776 / 327,680 | 1,043,616 |
+| ESP32-C3-DevKitM-1 | 1,023,602 / 1,310,720 | 41,892 / 327,680 | 1,066,256 |
+| ESP32-WROOM-32U | 1,037,057 / 1,310,720 | 47,776 / 327,680 | 1,043,632 |
+| ESP8266 ESP-12E | 493,247 / 1,044,464 | 35,820 / 81,920 | 497,392 |
+| ESP32-S3 N16R8 | 989,045 / 6,553,600 | 47,316 / 327,680 | 989,408 |
 
-All five profiles passed. The WROOM-32U board-folder entry point also built independently. The release gate caps reported flash and static RAM at 90% of their capacity, with a 43,008-byte static RAM budget on ESP8266.
+All five profiles passed. Each project built from a copy containing only that board's folder. The release gate caps reported flash and static RAM at 90% of their capacity, with a 43,008-byte static RAM budget on ESP8266.
 
 | Check | Result |
 | --- | --- |
@@ -19,9 +19,10 @@ All five profiles passed. The WROOM-32U board-folder entry point also built inde
 | SDK static regressions | 32 passed. The optional SDK example build matrix was skipped in this invocation |
 | MiningEmbed native ASan/UBSan | Direct EIP-155 and delegated scope, fee and nonce checks, durable pre-send journal, power-loss simulation, exact replay and receipt states passed |
 | Firmware storage and Serial ASan/UBSan | Both configurations, authorization and reset, 4,096-byte PEM uploads, malformed input, slot corruption, interrupted or ambiguous writes, pending-preserving repair, diagnostics, and authentication/staging isolation on a port switch passed with mocked flash and X.509 boundaries |
-| Release packaging | Five board profiles, both C3 connection descriptors referencing identical binaries, ZIP integrity, SHA-256 for all assets, and configuration-preserving write ranges verified. Altered firmware, an invalid NVS layout and an over-budget ESP8266 RAM report were rejected |
+| Host configurator | APLO1 status framing, staged field and CA uploads, command order and redaction passed |
+| Release packaging | Five board profiles, both C3 connection descriptors referencing identical binaries, ZIP integrity, SHA-256 for all assets, and configuration-preserving write ranges verified. The flash layout ID and install and upgrade offsets match the preceding v1.0 test package. Altered firmware, an invalid NVS layout and an over-budget ESP8266 RAM report were rejected |
 
-The local serial inventory showed two macOS system ports and no ESP devices. On-board USB provisioning, sustained TLS/mining, free heap and stack margin, physical power cuts during a send or flash operation, and a flash-preserving firmware upgrade are pending hardware verification. GitHub Actions and GitHub Release publication are configured in [the workflow](../.github/workflows/firmware.yml). These checks used the local workflow inputs and build commands. The hosted workflow has yet to run against the new library pins.
+The local serial inventory showed two macOS system ports and no ESP devices. On-board USB provisioning, sustained TLS/mining, free heap and stack margin, physical power cuts during a send or flash operation, and a flash-preserving firmware upgrade are pending hardware verification. GitHub Actions and GitHub Release publication are configured in [the workflow](../.github/workflows/firmware.yml). Current hosted verification is available in GitHub Actions. [Firmware builds](https://github.com/AploCoin/FirmwareEmbed/actions/workflows/firmware.yml)
 
 ## Previous hardware evidence
 
@@ -30,7 +31,9 @@ native USB Serial/JTAG and 15 on ESP32-S3 N16R8 over its UART0 bridge. The ESP82
 trial reported 14 confirmed shares with a patched BearSSL watchdog and larger core
 stacks. The merged revisions supply the S3 profile, ESP8266 at 160 MHz and the ECDSA
 watchdog feed. The v1.0 board-test image uses the stock BearSSL stacks and needs its
-own cold-start evidence. [SDK PR #30](https://github.com/AploCoin/AploEmbed/pull/30) ·
+own device test. The subsequent bench retest confirmed stock BearSSL TLS
+and confirmed shares without a reboot for the earlier board image `9fecb7f`.
+[SDK PR #30](https://github.com/AploCoin/AploEmbed/pull/30) ·
 [ESP8266 PR #1](https://github.com/AploCoin/FirmwareEmbed/pull/1) ·
 [S3 PR #2](https://github.com/AploCoin/FirmwareEmbed/pull/2)
 

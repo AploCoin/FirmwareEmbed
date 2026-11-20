@@ -1,11 +1,22 @@
 # Firmware architecture
 
-The repository has one application in `src/` and one PlatformIO profile per board in `boards.ini`. The board folders open that same application with a board-specific default. Firmware starts USB Serial and mounts storage before starting Wi-Fi. Wi-Fi association and SNTP progress independently of the USB configuration loop. Synchronous HTTPS calls can delay a Serial reply while a mining step is in progress.
+Each directory under `Firmware/` is one complete board project. It owns its
+PlatformIO settings, boot and console setup, network and clock code, flash
+driver and partition table where applicable. Add a board by creating a new
+directory with its own `platformio.ini`, source and `[release]` flash metadata.
+GitHub Actions discovers the project and builds a copy of it in isolation.
 
-- **AploEmbed** checks JSON-RPC responses, signs EIP-155 transactions, and provides endpoint-specific HTTPS trust. CA buffers live with the active configuration. The ESP8266 reuses a single BearSSL client and one parsed trust context and checks MFLN before writing an RPC request.
-- **MiningEmbed** reads and validates work, signs in the selected mode, and polls the exact transaction hash. It calls the firmware journal before sending signed bytes and waits for a durable clear before using the next nonce. Restored records are checked against the active signer, chain, fee and mining calldata.
-- **FirmwareEmbed** validates staged configurations and applies committed changes at restart. The NVS and LittleFS stores keep versioned, integrity-checked generations. A failed store or an unreadable record pauses mining. Replacing a configuration and retaining its outstanding transaction use the same durable record.
+- **AploEmbed** provides strict HTTPS RPC, endpoint-specific CA trust and exact-width
+  transaction signing. On ESP8266 it reuses the BearSSL client, checks 1024-byte
+  MFLN and streams large receipts.
+- **MiningEmbed** provides both modes, the transaction journal and recovery.
+  Its portable provisioning module implements APLO1, validates versioned snapshots
+  and uses the board's flash backend. It has no board selection or partition table.
+- **The board project** chooses the physical console, mounts NVS or LittleFS and
+  starts Wi-Fi and SNTP. It applies committed settings at restart and keeps the
+  active CA buffers alive. Synchronous HTTPS calls can delay a Serial reply while
+  a mining step is in progress.
 
-The RPC hosts are peers on the same chain. Use independent trusted CA chains if the primary and fallback use different roots. Both hosts need to serve the standard JSON-RPC methods plus the applicable native AploCoin contracts. The ESP8266 profile expects TLS 1.2 with 1024-byte MFLN. SNTP uses UDP port 123 and the configured servers.
-
-The Serial interface treats the USB host as trusted during provisioning. Runtime authentication protects local configuration changes. Stock firmware stores key material in plain flash on the supported board profiles. Physical access to flash or a host that can capture the USB session exposes that material, especially consequential in Direct Private Key mode.
+The USB protocol and `scripts/configure.py` are the same for all boards. The
+physical USB host is trusted during provisioning. Stock images store keys in
+onboard flash in plaintext, including the full account key in Direct mode.

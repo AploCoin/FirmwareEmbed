@@ -1,6 +1,5 @@
-#include "BoardRuntime.h"
-#include "DeviceConfig.h"
-#include "SerialConfig.h"
+#include <provisioning/DeviceConfig.h>
+#include <provisioning/SerialConfig.h>
 #include <Arduino.h>
 #include <trezor/sha3.h>
 #include <cassert>
@@ -27,7 +26,7 @@ bool SessionPlatformRandom(uint8_t*, size_t) {
 } // namespace aplo
 
 namespace {
-using namespace firmware;
+using namespace miningembed::provisioning;
 const std::string token(64, '1');
 const std::string other(64, '2');
 const std::string pem = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n";
@@ -134,7 +133,7 @@ Config configured() {
 
 MemoryFlash enrolled() {
     MemoryFlash flash;
-    DeviceConfig store(&flash);
+    DeviceConfig store(flash);
     assert(store.begin());
     assert(!store.ready() && !store.enrolled());
     assert(!store.enroll(std::string(64, '0')));
@@ -146,7 +145,7 @@ MemoryFlash enrolled() {
 
 MemoryFlash ready() {
     MemoryFlash flash = enrolled();
-    DeviceConfig store(&flash);
+    DeviceConfig store(flash);
     assert(store.begin());
     Config c = configured();
     assert(store.authenticate(token));
@@ -173,7 +172,7 @@ miningembed::PendingTransaction pending() {
 
 void storage() {
     MemoryFlash flash = ready();
-    DeviceConfig store(&flash);
+    DeviceConfig store(flash);
     assert(store.begin());
     assert(store.ready());
     const char* ca = store.config().primaryCa.c_str();
@@ -192,20 +191,20 @@ void storage() {
     assert(!store.commit(prohibited));
     assert(!store.factoryReset("NONE"));
     assert(store.config().primaryCa.c_str() == ca);
-    DeviceConfig reboot(&flash);
+    DeviceConfig reboot(flash);
     assert(reboot.begin());
     assert(reboot.pending()->raw == p.raw);
     assert(DeviceConfig::writePending(reboot.pending(), &reboot)); // Borrowed self-pointer is safe.
     assert(reboot.pending()->raw == p.raw);
     assert(DeviceConfig::writePending(nullptr, &reboot));
     assert(!reboot.pending());
-    DeviceConfig cleared(&flash);
+    DeviceConfig cleared(flash);
     assert(cleared.begin() && !cleared.pending() && cleared.ready());
     assert(cleared.factoryReset("NONE"));
-    DeviceConfig reset(&flash);
+    DeviceConfig reset(flash);
     assert(reset.begin() && !reset.enrolled() && !reset.ready());
     assert(reset.enroll(other)); // Tombstone permits explicit new owner enrollment after reboot.
-    DeviceConfig reenrolled(&flash);
+    DeviceConfig reenrolled(flash);
     assert(reenrolled.begin() && reenrolled.authenticate(other));
 }
 
@@ -213,32 +212,32 @@ void faults() {
     auto p = pending();
     for (bool after : {false, true}) {
         MemoryFlash flash = ready();
-        DeviceConfig store(&flash);
+        DeviceConfig store(flash);
         assert(store.begin());
         flash.failBefore = !after;
         flash.failAfter = after;
         assert(!DeviceConfig::writePending(&p, &store));
         assert(store.locked() && !store.ready());
         flash.failBefore = flash.failAfter = false;
-        DeviceConfig reboot(&flash);
+        DeviceConfig reboot(flash);
         assert(reboot.begin());
         assert(bool(reboot.pending()) == after);
     }
     MemoryFlash flash = ready();
-    DeviceConfig store(&flash);
+    DeviceConfig store(flash);
     assert(store.begin());
     flash.failReadback = true;
     assert(!DeviceConfig::writePending(&p, &store));
     assert(store.locked());
     flash.failReadback = false;
-    DeviceConfig reboot(&flash);
+    DeviceConfig reboot(flash);
     assert(reboot.begin() && reboot.pending());
     // Every byte in a committed record is covered by the schema or checksum.
     for (unsigned slot = 0; slot < 2; ++slot) {
         for (size_t i = 0; i < flash.slots[slot].size(); ++i) {
             MemoryFlash damaged = flash;
             damaged.slots[slot][i] ^= 0x20;
-            DeviceConfig corrupt(&damaged);
+            DeviceConfig corrupt(damaged);
             assert(!corrupt.begin() && corrupt.locked());
             unsigned before = damaged.writes;
             assert(!corrupt.enroll(token));
@@ -249,34 +248,34 @@ void faults() {
     for (size_t prefix = 0; prefix < flash.slots[1].size(); ++prefix) {
         MemoryFlash interrupted = flash;
         interrupted.slots[1].resize(prefix);
-        DeviceConfig recovered(&interrupted);
+        DeviceConfig recovered(interrupted);
         assert(!recovered.begin() && recovered.locked());
     }
     MemoryFlash future = flash;
     future.slots[1][4] = 2;
-    DeviceConfig unknown(&future);
+    DeviceConfig unknown(future);
     assert(!unknown.begin());
     unsigned writes = future.writes;
     assert(!unknown.factoryReset(p.hash) && future.writes == writes);
     for (unsigned slot = 0; slot < 2; ++slot) {
         MemoryFlash missing = flash;
         missing.exists[slot] = false;
-        DeviceConfig lost(&missing);
+        DeviceConfig lost(missing);
         assert(!lost.begin() && lost.locked());
     }
     MemoryFlash oversized = flash;
     oversized.slots[0].resize(DeviceConfig::MaxRecord + 1);
-    DeviceConfig large(&oversized);
+    DeviceConfig large(oversized);
     assert(!large.begin());
     MemoryFlash blank;
     blank.mount = false;
-    DeviceConfig failed(&blank);
+    DeviceConfig failed(blank);
     assert(!failed.begin() && !failed.enroll(token));
 }
 
 void pendingRepair() {
     MemoryFlash flash = ready();
-    DeviceConfig store(&flash);
+    DeviceConfig store(flash);
     assert(store.begin());
     auto p = pending();
     assert(DeviceConfig::writePending(&p, &store));
@@ -333,12 +332,12 @@ void pendingRepair() {
     const char* ca = store.config().primaryCa.c_str();
     assert(store.commit(edit));
     assert(store.pending()->hash == p.hash && store.config().primaryCa.c_str() == ca);
-    DeviceConfig reboot(&flash);
+    DeviceConfig reboot(flash);
     assert(reboot.begin() && reboot.pending());
     assert(reboot.pending()->raw == p.raw && reboot.config().password == "new-password");
     assert(reboot.authenticate(other) && !reboot.authenticate(token));
     assert(reboot.factoryReset(p.hash));
-    DeviceConfig reset(&flash);
+    DeviceConfig reset(flash);
     assert(reset.begin() && !reset.pending() && !reset.enrolled());
 }
 
@@ -392,7 +391,7 @@ void validation() {
 
 void serial() {
     MemoryFlash flash;
-    DeviceConfig blank(&flash);
+    DeviceConfig blank(flash);
     assert(blank.begin());
     SerialConfig init(blank);
     Port port;
@@ -400,9 +399,9 @@ void serial() {
         port.run(init, "APLO1 1 ENROLL " + token + " I_HAVE_PHYSICAL_USB_CONTROL\n") ==
         "APLO1 1 OK restart\n"
     );
-    DeviceConfig store(&flash);
+    DeviceConfig store(flash);
     assert(store.begin());
-    SerialConfig serial(store, []() -> firmware::BoardDiagnostics {
+    SerialConfig serial(store, []() -> miningembed::provisioning::BoardDiagnostics {
         return {3, 160, 4194304, 0, 28256, 28040};
     });
     auto status = port.run(serial, "APLO1 2 STATUS\n", "secret raw RPC error");
@@ -468,7 +467,7 @@ void serial() {
         port.run(serial, "APLO1 16 COMMIT\n") == "APLO1 16 OK restart\n" &&
         !serial.provisioningActive()
     );
-    DeviceConfig restored(&flash);
+    DeviceConfig restored(flash);
     assert(restored.begin() && restored.config().primaryCa == largePem);
     assert(restored.config().fallbackCa == largePem);
     assert(restored.config().password == secret);
@@ -503,7 +502,7 @@ void serial() {
     // Enrollment window closes and never wraps back open after millis overflow.
     testMillis = 0;
     MemoryFlash lateFlash;
-    DeviceConfig lateStore(&lateFlash);
+    DeviceConfig lateStore(lateFlash);
     assert(lateStore.begin());
     SerialConfig late(lateStore);
     testMillis = 120000;

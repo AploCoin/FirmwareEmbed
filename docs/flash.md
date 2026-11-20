@@ -4,7 +4,7 @@ Choose the exact PlatformIO board profile. ESP32 DevKit and WROOM-32U both ident
 
 ## First v1.0 installation
 
-Use the selected profile's `install` parts from `manifest.json`. The ESP32 profiles include bootloader, partition table and OTA selector alongside the application. ESP8266 uses the application at offset 0 and initializes LittleFS on a provably erased filesystem region. Both modes are in the same application binary. For a local source build the equivalent is `pio run -e <board> -t upload`, or add `-c platformio-local.ini` when using sibling libraries.
+Use the selected profile's `install` parts from `manifest.json`. The ESP32 profiles include bootloader, partition table and OTA selector alongside the application. ESP8266 uses the application at offset 0 and initializes LittleFS on a provably erased filesystem region. Both modes are in the same application binary. For a local source build, run `pio run -t upload` inside the selected board folder.
 
 The pre-v1 firmware used build-time settings and held the session key and transaction state in RAM. Move Wi-Fi, RPC/CA and approved key settings into the [USB configurator](serial-api.md) and reconcile any old outstanding share on the owner machine before enabling mining. First v1.0 installation on ESP32 adds a dedicated 64 KiB `aplo_cfg` NVS partition at `0x290000` (4 MB) or `0xc90000` (16 MB), from the start of the stock SPIFFS area. The old mining firmware left that area available. Apply the partition table only to the matching board and flash size. ESP8266 keeps the 4 MB `eagle.flash.4m1m.ld` map. Preserve any existing filesystem data separately if the device previously ran unrelated firmware.
 
@@ -16,7 +16,7 @@ Schema v1 records are read by compatible images using the same layout. Unrecogni
 
 ## Release assets
 
-GitHub Actions builds all profiles, runs native tests, enforces flash/static-RAM budgets, and assembles binaries, manifests and `SHA256SUMS`. A validated version tag `vMAJOR.MINOR[.PATCH]` publishes the assets to its GitHub release after the checks pass. Make the exact SDK and mining commits in `libraries.ini` available on their respective GitHub repositories before running release CI.
+GitHub Actions builds all profiles, runs native tests, enforces flash/static-RAM budgets, and assembles binaries, manifests and `SHA256SUMS`. A validated version tag `vMAJOR.MINOR[.PATCH]` publishes the assets to its GitHub release after the checks pass. The workflow discovers each board's `platformio.ini`, builds from an isolated copy of that folder and tests every library revision pair used by the board projects.
 
 - `manifest.json` is the versioned flasher index. Select `profiles[].id` explicitly and use only its `install` or `update` list. Each entry gives a relative asset path, byte offset, size and SHA-256. `storage` identifies the flash region that the flasher must preserve. `serialTypes` lists the supported connection types. Each ESP32-C3 connection uses the same set of binaries.
 - `manifest-<board>.json` is a first-install descriptor for ESP Web Tools. Use **Skip erase** to preserve data and use the flasher index's application-only path for v1.x updates. [ESP Web Tools manifest documentation](https://esphome.github.io/esp-web-tools/)

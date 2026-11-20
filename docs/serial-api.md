@@ -1,6 +1,6 @@
 # USB provisioning API v1
 
-Integration API is in `include/DeviceConfig.h` and `include/SerialConfig.h`.
+The integration API is in MiningEmbed under `src/provisioning`.
 `begin()` mounts storage without destructive recovery; `locked()` distinguishes storage
 failure from an empty, usable device. `ready()` requires enrolled, enabled, validated
 configuration. `config()` and its CA buffers remain immutable until destruction.
@@ -20,6 +20,29 @@ Config fields: `mode` (Session/Direct), `ssid`, `password`, `primaryUrl`, `fallb
 `hashesPerStep` and `intervalMs`. `operatorVerifier[32]` holds a domain-separated
 SHA-256 verifier of a 32-byte random Operator token. No legacy compile-time settings
 or RAM-only secrets are imported automatically.
+
+## Host configurator
+
+`scripts/configure.py` uses the same APLO1 commands on every board. Install
+`pyserial`, then run the script with the board's USB port:
+
+~~~sh
+python3 -m pip install pyserial
+python3 scripts/configure.py --port /dev/ttyUSB0 status
+python3 scripts/configure.py --port /dev/ttyUSB0 enroll
+python3 scripts/configure.py --port /dev/ttyUSB0 apply --config board.json \
+  --primary-ca rpc-root.pem --ask-wifi-password --ask-key
+python3 scripts/configure.py --port /dev/ttyUSB0 diag
+~~~
+
+The JSON object maps the public field names in the table below to text or
+integers. Use JSON `true` for `enabled` to activate valid settings. Provide
+the session owner, signer, budget and expiry when setting `mode` to `session`.
+Set `mode` to `direct` to use the key's address directly. The configurator
+prompts for the operator token, Wi-Fi password and private key with hidden input.
+Use `--fallback-ca` for a second endpoint. An empty PEM file clears that endpoint's
+stored CA when the remaining settings permit it. For an authorized reset, run
+`reset --journal NONE` or pass the exact verified pending hash after reconciliation.
 
 ## Transport and authentication
 

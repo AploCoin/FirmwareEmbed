@@ -2,6 +2,8 @@
 
 This profile requires 4 MB flash, runs at 160 MHz, and requires 1024-byte TLS MFLN on each HTTPS RPC endpoint.
 
-Build from the repository root with `pio run -e esp12e`, or open this directory in PlatformIO. Keep this directory inside the FirmwareEmbed checkout.
+Copy this directory on its own and open it in PlatformIO. Run `pio run` to compile
+or `pio run -t upload` to flash the selected device. PlatformIO fetches the pinned
+libraries from GitHub.
 
-[Installation and upgrade](../../docs/flash.md) · [USB Serial API](../../docs/serial-api.md)
+[Installation and upgrade](https://github.com/AploCoin/FirmwareEmbed/blob/main/docs/flash.md) · [USB Serial configurator](https://github.com/AploCoin/FirmwareEmbed/blob/main/docs/serial-api.md)

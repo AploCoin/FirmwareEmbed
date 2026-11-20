@@ -2,6 +2,8 @@
 """Check each PlatformIO build and assemble a release with bounded flash writes."""
 
 import argparse
+import configparser
+from dataclasses import dataclass
 import hashlib
 import json
 import re
@@ -9,34 +11,99 @@ import shutil
 import struct
 from pathlib import Path
 
-BOARDS = {
-    "esp32dev": ("ESP32", ("uart",), 4, 0x1000, 0x290000),
-    "esp32-c3-devkitm-1": ("ESP32-C3", ("uart", "cdc"), 4, 0, 0x290000),
-    "esp32-wroom-32u": ("ESP32", ("uart",), 4, 0x1000, 0x290000),
-    "esp12e": ("ESP8266", ("uart",), 4, 0, 0x300000),
-    "esp32-s3-n16r8": ("ESP32-S3", ("uart",), 16, 0, 0xC90000),
-}
-RAM_BUDGET = {"esp12e": 43008}
 SECTOR = 4096
+
+
+@dataclass(frozen=True)
+class Project:
+    id: str
+    path: Path
+    chip: str
+    consoles: tuple[str, ...]
+    flash_mb: int
+    boot_offset: int
+    config_offset: int
+    config_bytes: int
+    layout: str | None
+    ram_budget: int | None
+    sdk: str
+    mining: str
+
+
+def read_project(path):
+    config = configparser.ConfigParser(interpolation=None)
+    with (path / "platformio.ini").open(encoding="utf-8") as source:
+        config.read_file(source)
+    board = config["platformio"]["default_envs"]
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", board):
+        raise ValueError(f"{path}: expected one default environment")
+    env = config[f"env:{board}"]
+    pins = dict(re.findall(
+        r"^https://github\.com/AploCoin/(AploEmbed|MiningEmbed)\.git#([0-9a-f]{40})$",
+        env["lib_deps"], re.MULTILINE,
+    ))
+    if set(pins) != {"AploEmbed", "MiningEmbed"}:
+        raise ValueError(f"{path}: expected published SHA pins for both libraries")
+    release = config["release"]
+    consoles = tuple(value.strip() for value in release["serial_types"].split(","))
+    if not set(consoles) <= {"cdc", "uart"} or len(set(consoles)) != len(consoles):
+        raise ValueError(f"{path}: invalid serial_types")
+    config_offset = int(release["storage_offset"], 0)
+    config_bytes = int(release["storage_size"], 0)
+    flash_mb = release.getint("flash_mib")
+    if (
+        config_offset <= 0 or config_bytes <= 0
+        or config_offset % SECTOR or config_bytes % SECTOR
+        or config_offset + config_bytes > flash_mb * 1024 * 1024
+    ):
+        raise ValueError(f"{path}: invalid storage range")
+    return Project(
+        board, path, release["chip"], consoles, flash_mb,
+        int(release["bootloader_offset"], 0), config_offset, config_bytes,
+        release.get("layout"), release.getint("static_ram_budget", fallback=None),
+        pins["AploEmbed"], pins["MiningEmbed"],
+    )
+
+
+def projects(directory):
+    profiles = [read_project(path.parent) for path in sorted(directory.glob("*/platformio.ini"))]
+    if not profiles or len({profile.id for profile in profiles}) != len(profiles):
+        raise ValueError("expected at least one board and unique environment names")
+    return profiles
+
+
+def matrix(directory):
+    profiles = projects(directory)
+    return {
+        "boards": {"include": [
+            {"id": profile.id, "directory": str(profile.path)} for profile in profiles
+        ]},
+        "native": {"include": [
+            {"sdk": sdk, "mining": mining}
+            for sdk, mining in sorted({(profile.sdk, profile.mining) for profile in profiles})
+        ]},
+    }
 
 
 def write_json(path, data):
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def measure(log, board):
+def measure(log, project):
     sizes = {}
     for region, used, capacity in re.findall(
         r"(RAM|Flash):\s*\[[^\]]*\].*?\(used (\d+) bytes from (\d+) bytes\)",
         log.read_text(encoding="utf-8"),
     ):
         used, capacity = int(used), int(capacity)
-        limit = min(capacity * 9 // 10, RAM_BUDGET.get(board, capacity)) if region == "RAM" else capacity * 9 // 10
+        limit = capacity * 9 // 10
+        if region == "RAM" and project.ram_budget is not None:
+            limit = min(limit, project.ram_budget)
         if not 0 < used <= limit:
-            raise ValueError(f"{board} {region}: {used} bytes exceeds budget of {limit}")
+            raise ValueError(f"{project.id} {region}: {used} bytes exceeds budget of {limit}")
         sizes[region.lower()] = {"used": used, "limit": limit, "capacity": capacity}
     if sizes.keys() != {"ram", "flash"}:
-        raise ValueError(f"{board}: missing PlatformIO RAM or flash measurements")
+        raise ValueError(f"{project.id}: missing PlatformIO RAM or flash measurements")
     return sizes
 
 
@@ -44,10 +111,11 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def stage(board, build, log, packages, output):
-    family, consoles, flash_mb, boot_offset, config_offset = BOARDS[board]
-    config_bytes = 0xFA000 if family == "ESP8266" else 0x10000
-    sizes = measure(log, board)
+def stage(project, build, log, packages, output):
+    board, family, consoles = project.id, project.chip, project.consoles
+    flash_mb, boot_offset = project.flash_mb, project.boot_offset
+    config_offset, config_bytes = project.config_offset, project.config_bytes
+    sizes = measure(log, project)
     output.mkdir(parents=True, exist_ok=True)
 
     def part(kind, image, offset, limit):
@@ -60,9 +128,11 @@ def stage(board, build, log, packages, output):
         return {"path": asset.name, "offset": offset, "size": length, "sha256": digest(asset)}
 
     if family == "ESP8266":
+        if boot_offset or not project.layout:
+            raise ValueError(f"{board}: expected an ESP8266 layout ID and boot at zero")
         application = part("firmware", build / "firmware.bin", 0, sizes["flash"]["capacity"])
         install = [application]
-        layout = "esp8266-4m1m-littlefs-v1"
+        layout = project.layout
     else:
         table = build / "partitions.bin"
         entries = {}
@@ -116,11 +186,12 @@ def stage(board, build, log, packages, output):
     )
 
 
-def assemble(staged, output, version):
+def assemble(directory, staged, output, version):
     output.mkdir(parents=True, exist_ok=True)
     profiles = []
     published = []
-    for board in BOARDS:
+    for project in projects(directory):
+        board = project.id
         source = staged / board
         profile = json.loads((source / f"{board}.json").read_text(encoding="utf-8"))
         if profile["id"] != board:
@@ -172,18 +243,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     build = sub.add_parser("stage")
-    build.add_argument("board", choices=BOARDS)
-    for name in ("build", "log", "packages", "output"):
+    for name in ("project", "build", "log", "packages", "output"):
         build.add_argument(f"--{name}", type=Path, required=True)
     release = sub.add_parser("assemble")
+    release.add_argument("--projects", type=Path, required=True)
     release.add_argument("--staged", type=Path, required=True)
     release.add_argument("--output", type=Path, required=True)
     release.add_argument("--version", required=True)
+    discover = sub.add_parser("matrix")
+    discover.add_argument("--projects", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "stage":
-        stage(args.board, args.build, args.log, args.packages, args.output)
+        stage(read_project(args.project), args.build, args.log, args.packages, args.output)
+    elif args.command == "assemble":
+        assemble(args.projects, args.staged, args.output, args.version)
     else:
-        assemble(args.staged, args.output, args.version)
+        print(json.dumps(matrix(args.projects)))
 
 
 if __name__ == "__main__":

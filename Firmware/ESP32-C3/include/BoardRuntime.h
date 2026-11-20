@@ -1,24 +1,18 @@
 #pragma once
 
-#include <stdint.h>
+#include <provisioning/FirmwareRuntime.h>
 
 namespace firmware {
 
-enum class NetworkState { Wifi, Clock, Ready };
+using miningembed::provisioning::BoardDiagnostics;
+using miningembed::provisioning::Config;
+using miningembed::provisioning::NetworkState;
 
-struct BoardDiagnostics {
-    uint32_t resetReason;
-    uint32_t cpuMHz;
-    uint32_t flashBytes;
-    uint32_t psramBytes;
-    uint32_t freeHeapBytes;
-    uint32_t largestHeapBlockBytes;
-};
+miningembed::provisioning::FlashBackend& flashStorage();
 
 class BoardRuntime {
 public:
-    void
-    begin(const char* ssid, const char* password, const char* ntpPrimary, const char* ntpFallback);
+    void begin(const Config& config);
     NetworkState poll();
     static BoardDiagnostics diagnostics();
 
