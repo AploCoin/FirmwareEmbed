@@ -29,7 +29,11 @@ inline uint8_t bytes[4096];
 inline int programLimit=4096, eraseLimit=4096;
 inline bool readOk=true;
 inline bool modelRead(uint32_t at, void* out, size_t n) {
- if (!readOk || at+n>4096) return false; memcpy(out,bytes+at,n); return true;
+    if (!readOk || at + n > 4096) {
+        return false;
+    }
+    memcpy(out, bytes + at, n);
+    return true;
 }
 inline bool modelWrite(uint32_t at,const void* in,size_t n) {
  size_t written=std::min(n,size_t(programLimit));
