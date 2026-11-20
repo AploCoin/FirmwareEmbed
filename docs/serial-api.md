@@ -237,7 +237,7 @@ Storage schema is **1**. Both slots contain a complete Config plus optional jour
 The 52-byte little-endian envelope is magic `APFC`, uint16 schema, uint16 reserved
 (zero), uint64 generation, uint32 payload length, 32-byte SHA-256. The digest covers
 the first 20 header bytes followed by the entire payload. Strings carry uint16
-length prefixes. Payload order follows encode/decode in `src/DeviceConfig.cpp`;
+length prefixes. Payload order follows encode/decode in MiningEmbed's `src/provisioning/DeviceConfig.cpp`;
 booleans and Mode are single bytes, key and verifier are 32 bytes each, expiry and
 nonce are uint64, polling settings uint32. Journal contains nonce, public hash,
 bounded raw signed hex, 32-byte proof and uint256 maximum fee encoded as hex text.

@@ -16,7 +16,7 @@ Schema v1 records are read by compatible images using the same layout. Unrecogni
 
 ## Release assets
 
-GitHub Actions builds all profiles, runs native tests, enforces flash/static-RAM budgets, and assembles binaries, manifests and `SHA256SUMS`. A validated version tag `vMAJOR.MINOR[.PATCH]` publishes the assets to its GitHub release after the checks pass. The workflow discovers each board's `platformio.ini`, builds from an isolated copy of that folder and tests every library revision pair used by the board projects.
+GitHub Actions builds all profiles, runs native tests, enforces flash/static-RAM budgets, and assembles binaries, manifests and `SHA256SUMS`. A validated version tag `vMAJOR.MINOR[.PATCH]` publishes the assets to its GitHub release after the checks pass. The workflow discovers each board's `platformio.ini`, builds from an isolated copy of that folder and resolves the latest AploEmbed and MiningEmbed revisions once per run. The same pair is used by the test and build jobs and recorded in the manifest.
 
 - `manifest.json` is the versioned flasher index. Select `profiles[].id` explicitly and use only its `install` or `update` list. Each entry gives a relative asset path, byte offset, size and SHA-256. `storage` identifies the flash region that the flasher must preserve. `serialTypes` lists the supported connection types. Each ESP32-C3 connection uses the same set of binaries.
 - `manifest-<board>.json` is a first-install descriptor for ESP Web Tools. Use **Skip erase** to preserve data and use the flasher index's application-only path for v1.x updates. [ESP Web Tools manifest documentation](https://esphome.github.io/esp-web-tools/)

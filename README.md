@@ -12,8 +12,8 @@ AploCoin mining firmware with two modes in one image per board. Set up the devic
 
 Each board folder is a complete PlatformIO project. Copy just that folder and open
 it in PlatformIO, or run `pio run` from inside it. The board's `platformio.ini`
-pins the GitHub revisions of AploEmbed and MiningEmbed, which PlatformIO fetches
-automatically.
+uses the latest code from the default GitHub branches of AploEmbed and MiningEmbed.
+Run `pio pkg update` inside an existing project to refresh downloaded libraries.
 
 ~~~sh
 pio run -d Firmware/ESP8266

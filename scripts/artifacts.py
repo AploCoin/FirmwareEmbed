@@ -12,6 +12,7 @@ import struct
 from pathlib import Path
 
 SECTOR = 4096
+LIBRARIES = {"AploEmbed", "MiningEmbed"}
 
 
 @dataclass(frozen=True)
@@ -26,8 +27,6 @@ class Project:
     config_bytes: int
     layout: str | None
     ram_budget: int | None
-    sdk: str
-    mining: str
 
 
 def read_project(path):
@@ -38,12 +37,12 @@ def read_project(path):
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", board):
         raise ValueError(f"{path}: expected one default environment")
     env = config[f"env:{board}"]
-    pins = dict(re.findall(
-        r"^https://github\.com/AploCoin/(AploEmbed|MiningEmbed)\.git#([0-9a-f]{40})$",
+    libraries = re.findall(
+        r"^https://github\.com/AploCoin/(AploEmbed|MiningEmbed)\.git$",
         env["lib_deps"], re.MULTILINE,
-    ))
-    if set(pins) != {"AploEmbed", "MiningEmbed"}:
-        raise ValueError(f"{path}: expected published SHA pins for both libraries")
+    )
+    if set(libraries) != LIBRARIES or len(libraries) != len(LIBRARIES):
+        raise ValueError(f"{path}: expected both AploCoin library URLs without refs")
     release = config["release"]
     consoles = tuple(value.strip() for value in release["serial_types"].split(","))
     if not set(consoles) <= {"cdc", "uart"} or len(set(consoles)) != len(consoles):
@@ -61,7 +60,6 @@ def read_project(path):
         board, path, release["chip"], consoles, flash_mb,
         int(release["bootloader_offset"], 0), config_offset, config_bytes,
         release.get("layout"), release.getint("static_ram_budget", fallback=None),
-        pins["AploEmbed"], pins["MiningEmbed"],
     )
 
 
@@ -74,15 +72,9 @@ def projects(directory):
 
 def matrix(directory):
     profiles = projects(directory)
-    return {
-        "boards": {"include": [
-            {"id": profile.id, "directory": str(profile.path)} for profile in profiles
-        ]},
-        "native": {"include": [
-            {"sdk": sdk, "mining": mining}
-            for sdk, mining in sorted({(profile.sdk, profile.mining) for profile in profiles})
-        ]},
-    }
+    return {"include": [
+        {"id": profile.id, "directory": str(profile.path)} for profile in profiles
+    ]}
 
 
 def write_json(path, data):
@@ -186,7 +178,7 @@ def stage(project, build, log, packages, output):
     )
 
 
-def assemble(directory, staged, output, version):
+def assemble(directory, staged, output, version, libraries=None):
     output.mkdir(parents=True, exist_ok=True)
     profiles = []
     published = []
@@ -229,10 +221,13 @@ def assemble(directory, staged, output, version):
         profiles.append(profile)
 
     manifest = output / "manifest.json"
-    write_json(
-        manifest,
-        {"schemaVersion": 1, "name": "FirmwareEmbed", "version": version, "eraseAll": False, "profiles": profiles},
-    )
+    index = {
+        "schemaVersion": 1, "name": "FirmwareEmbed", "version": version,
+        "eraseAll": False, "profiles": profiles,
+    }
+    if libraries:
+        index["libraries"] = libraries
+    write_json(manifest, index)
     published.append(manifest)
     (output / "SHA256SUMS").write_text(
         "".join(f"{digest(path)}  {path.name}\n" for path in sorted(published)), encoding="ascii"
@@ -250,13 +245,20 @@ def main():
     release.add_argument("--staged", type=Path, required=True)
     release.add_argument("--output", type=Path, required=True)
     release.add_argument("--version", required=True)
+    release.add_argument("--sdk-sha")
+    release.add_argument("--mining-sha")
     discover = sub.add_parser("matrix")
     discover.add_argument("--projects", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "stage":
         stage(read_project(args.project), args.build, args.log, args.packages, args.output)
     elif args.command == "assemble":
-        assemble(args.projects, args.staged, args.output, args.version)
+        libraries = None
+        if args.sdk_sha or args.mining_sha:
+            libraries = {"AploEmbed": args.sdk_sha, "MiningEmbed": args.mining_sha}
+            if any(not re.fullmatch(r"[0-9a-f]{40}", sha or "") for sha in libraries.values()):
+                release.error("expected both resolved 40-character library revisions")
+        assemble(args.projects, args.staged, args.output, args.version, libraries)
     else:
         print(json.dumps(matrix(args.projects)))
 
