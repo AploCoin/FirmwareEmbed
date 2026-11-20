@@ -2,6 +2,9 @@
 
 #include "BoardRuntime.h"
 
+// Pending reconciliation and TLS share the Arduino loop task.
+SET_LOOP_TASK_STACK_SIZE(12 * 1024)
+
 namespace {
 firmware::BoardRuntime board;
 miningembed::provisioning::FirmwareRuntime app(
