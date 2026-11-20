@@ -1,28 +1,39 @@
-# FirmwareEmbed v1.0 verification
+# FirmwareEmbed USB factory validation
 
-The 2026-11-20 local matrix built five detached board folders with PlatformIO 6.1.19, AploEmbed `1f7500a` and MiningEmbed `cce1737`. Figures are bytes from PlatformIO's linker size report and from the generated application file.
+The 2026-11-20 local matrix built all eight supported environments with PlatformIO 6.1.19, source-only standalone board folders, and clean Git archives of locked AploEmbed `01b5a77fb54086dc88881748efba1a3ccd0861d6` and MiningEmbed `0ec01eabf912550709f82620de494c18b2281da2`. The local firmware version is `usb-v2-local`. Figures below are bytes from the linker size report and generated application image; these are compilation and packaging results, not physical-device measurements.
 
-| Profile | Flash used / partition capacity | Static RAM used / available | Application image |
+| Environment | Flash used / application capacity | Static RAM used / available | Application image |
 | --- | ---: | ---: | ---: |
-| ESP32 DevKit | 1,037,033 / 1,310,720 | 47,776 / 327,680 | 1,043,616 |
-| ESP32-C3-DevKitM-1 | 1,023,602 / 1,310,720 | 41,892 / 327,680 | 1,066,256 |
-| ESP32-WROOM-32U | 1,037,057 / 1,310,720 | 47,776 / 327,680 | 1,043,632 |
-| ESP8266 ESP-12E | 493,247 / 1,044,464 | 35,820 / 81,920 | 497,392 |
-| ESP32-S3 N16R8 | 989,045 / 6,553,600 | 47,316 / 327,680 | 989,408 |
+| `esp32dev` | 1,041,053 / 2,621,440 | 47,952 / 327,680 | 1,047,632 |
+| `esp32dev-2m` | 1,041,065 / 1,572,864 | 47,952 / 327,680 | 1,047,648 |
+| `esp32-c3-devkitm-1` | 1,028,796 / 2,621,440 | 42,068 / 327,680 | 1,072,336 |
+| `esp32-s3-n16r8` | 993,129 / 13,107,200 | 47,492 / 327,680 | 993,488 |
+| `esp32-wroom-32u` | 1,041,069 / 2,621,440 | 47,952 / 327,680 | 1,047,648 |
+| `esp12e` | 500,495 / 1,044,464 | 37,052 / 81,920 | 504,640 |
+| `esp8266-2m` | 500,503 / 1,044,464 | 37,052 / 81,920 | 504,656 |
+| `esp01-1m` | 500,495 / 892,912 | 37,052 / 81,920 | 504,640 |
 
-All five profiles passed. Each project built from a copy containing only that board's folder. The release gate caps reported flash and static RAM at 90% of their capacity, with a 43,008-byte static RAM budget on ESP8266.
+All eight passed the release resource gates: at most 90% of reported flash/static RAM capacity, with the tighter 43,008-byte static RAM budget on ESP8266. Every application and install part also passed sector-rounded erase-range checks against its physical flash and preserved configuration region. Static RAM does not establish usable TLS heap or stack margin on a physical board.
 
-| Check | Result |
+| Diagnostic environment | Measured reason for exclusion |
 | --- | --- |
-| SDK native ASan/UBSan | JSON-RPC and receipt parsing, exact hash binding, large nonce and chain ID, ABI and signature vectors passed |
-| SDK TLS, standard and ESP8266 build branches | Loopback HTTPS trust, CA-only runtime PEM, hostname and validity failures, failover, trust overlap and streamed receipt cases passed. The ESP8266 test uses a host transport for the handshake and models MFLN negotiation |
-| SDK static regressions | 32 passed. The optional SDK example build matrix was skipped in this invocation |
-| MiningEmbed native ASan/UBSan | Direct EIP-155 and delegated scope, fee and nonce checks, durable pre-send journal, power-loss simulation, exact replay and receipt states passed |
-| Firmware storage and Serial ASan/UBSan | Both configurations, authorization and reset, 4,096-byte PEM uploads, malformed input, slot corruption, interrupted or ambiguous writes, pending-preserving repair, diagnostics, and authentication/staging isolation on a port switch passed with mocked flash and X.509 boundaries |
-| Host configurator | APLO1 status framing, staged field and CA uploads, command order and redaction passed |
-| Release packaging | Five board profiles, both C3 connection descriptors referencing identical binaries, ZIP integrity, SHA-256 for all assets, and configuration-preserving write ranges verified. The flash layout ID and install and upgrade offsets match the preceding v1.0 test package. Altered firmware, an invalid NVS layout and an over-budget ESP8266 RAM report were rejected |
+| `esp01-512k` | Full application fails linking: `.irom0.text` will not fit `irom0_0_seg` in `eagle.flash.512k64.ld` (434,160-byte executable capacity with 64 KiB filesystem). The comparable 1 MiB image is 504,640 bytes. |
+| `esp32dev-1m` | PlatformIO rejects 1,041,065 bytes of program content against the 851,968-byte factory slot. |
 
-The local serial inventory showed two macOS system ports and no ESP devices. On-board USB provisioning, sustained TLS/mining, free heap and stack margin, physical power cuts during a send or flash operation, and a flash-preserving firmware upgrade are pending hardware verification. GitHub Actions and GitHub Release publication are configured in [the workflow](../.github/workflows/firmware.yml). Current hosted verification is available in GitHub Actions. [Firmware builds](https://github.com/AploCoin/FirmwareEmbed/actions/workflows/firmware.yml)
+CI builds these two diagnostic profiles and accepts only a recognized flash-capacity failure. A compile error in unrelated source does not count as evidence that the device is too small. Neither diagnostic profile can be staged or published as supported firmware.
+
+The 13 current host artifact/USB-service regressions passed. They cover immutable dependency pins, the eight-profile release/checksum round trip, matching board/version/layout identity, rejection of OTA partition tables, wrong board/map/schema, corrupted or unsafe asset paths, sector rounding, RAM budgets, and exact old/factory partition-table checks. A real eight-profile release was also assembled locally; every entry in `SHA256SUMS` was independently recalculated. Firmware ELF strings confirmed the WROOM board ID, layout and embedded version. Workflow YAML and all Bash run blocks parsed successfully.
+
+The USB service's execution path probes the physical chip family and flash size and reads ESP32 partition tables before an update or migration. Host regressions validate its decision logic; hardware USB execution and power-cut recovery require the exact connected device. The generated manifest's `update` list is one application image, and its install/migration lists omit OTA selector images. No generic web-installer descriptors are produced.
+
+## Native and hardware evidence boundaries
+
+The current native sanitizer tests passed for SDK, mining and provisioning,
+including interrupted migration, separate journal writes and owner-signed
+Operator token rotation. Both TLS transport test suites also passed. Host
+storage faults are injected at record boundaries.
+
+The [flash guide](flash.md) defines the supported same-offset migration and schema-compatible manual rollback paths. A mocked interrupted-write test cannot prove recovery during a physical flash power cut. ESP-01/ESP-01S wiring, supply integrity, MFLN support and sustained mining remain hardware-specific checks. [Flash profile limits](compatibility.md)
 
 ## Previous hardware evidence
 

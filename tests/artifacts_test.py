@@ -145,6 +145,24 @@ class ReleaseSafety(unittest.TestCase):
         with self.assertRaises(ValueError):
             flash.plan(self.manifest, self.project.id, "migrate", from_layout="unrelated")
 
+    def test_migration_reads_exact_physical_legacy_partition_map(self):
+        entries = [("nvs", 1, 2, 0x9000, 0x5000), ("otadata", 1, 0, 0xe000, 0x2000),
+                   ("app0", 0, 0x10, 0x10000, 0x140000),
+                   ("app1", 0, 0x11, 0x150000, 0x140000),
+                   ("aplo_cfg", 1, 2, self.project.config_offset, 0x10000)]
+        raw = b"".join(struct.pack("<HBBII16sI", 0x50aa, t, sub, start, size, name.encode(), 0)
+                       for name, t, sub, start, size in entries) + b"\xff" * 32
+        flash.validate_legacy_table(raw, self.profile)
+        wrong = bytearray(raw)
+        struct.pack_into("<I", wrong, 4 * 32 + 4, self.project.config_offset + 4096)
+        with self.assertRaisesRegex(ValueError, "physical partition"):
+            flash.validate_legacy_table(wrong, self.profile)
+        with self.assertRaises(ValueError):
+            flash.validate_legacy_table((self.build / "partitions.bin").read_bytes(), self.profile)
+        flash.validate_factory_table((self.build / "partitions.bin").read_bytes(), self.profile)
+        with self.assertRaisesRegex(ValueError, "factory map"):
+            flash.validate_factory_table(raw, self.profile)
+
     def test_info_payload_and_json(self):
         self.assertEqual(flash.device_info("APLO1 OK info board=esp32dev storage_schema=2")["board"], "esp32dev")
         self.assertEqual(flash.device_info(json.dumps(self.info)), self.info)

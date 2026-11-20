@@ -18,11 +18,16 @@ Run one explicit migration using `migrate` parts, even when the previous firmwar
 
 The established configuration offsets remain `0x290000` on the 4 MiB ESP32, C3 and WROOM profiles and `0xc90000` on the 16 MiB S3. `0x650000` was the S3's old second application offset, never its configuration offset. Migration does not erase configuration. The new firmware can read a supported legacy configuration record at the same offset and migrate it atomically, preserving pending transaction reconciliation. See [storage architecture](architecture.md).
 
-The migration service accepts `--from-layout esp32-4m-dual-app-v1` on the three established 4 MiB boards, or `--from-layout esp32-s3-16m-dual-app-v1` on S3. This is an explicit statement that the device runs that old FirmwareEmbed map. Unknown maps and moves to smaller flash are separate migrations requiring an exported configuration and reconciled pending state.
+The migration service accepts `--from-layout esp32-4m-dual-app-v1` on the three established 4 MiB boards, or `--from-layout esp32-s3-16m-dual-app-v1` on S3. This is an explicit statement that the device runs that old FirmwareEmbed map. Before executing any migration write, the service reads the physical partition table and verifies the old app slots, OTA selector and unchanged configuration bounds; a mismatched table is rejected. Unknown maps and moves to smaller flash are separate migrations requiring an exported configuration and reconciled pending state.
+
+For an existing FirmwareEmbed ESP8266 4 MiB image, use `esp12e` with
+`--mode install` once. It writes only the application and keeps the original
+LittleFS range. The first boot migrates the records in place. Later updates can
+use `--mode update` with the device's `GET_INFO` reply.
 
 ## Configuration-preserving application updates
 
-Capture `GET_INFO` from the connected device immediately before flashing, and select the same board and layout. Use its `update` list with `eraseAll: false`. Every update contains exactly one application image. The service validates the board, layout, physical/profile flash size, storage bounds, readable storage schema, each asset's SHA-256 and every sector the write will erase. A mismatched board/layout is rejected. esptool additionally probes the physical chip family and flash size before execution.
+Capture `GET_INFO` from the connected device immediately before flashing, and select the same board and layout. Use its `update` list with `eraseAll: false`. Every update contains exactly one application image. The service validates the board, layout, physical/profile flash size, storage bounds, readable storage schema, each asset's SHA-256 and every sector the write will erase. A mismatched board/layout is rejected. esptool additionally probes the physical chip family and flash size before execution; ESP32 updates read and verify the physical factory partition table before writing.
 
 Install Python dependencies with `python3 -m pip install 'esptool>=4,<5' pyserial`. Capture device info using the [configurator](serial-api.md), and save its `info ...` output or JSON to `device-info.txt`. Inspect the plan before executing:
 

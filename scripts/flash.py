@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import struct
+import tempfile
 import sys
 
 SECTOR = 4096
@@ -85,6 +87,40 @@ def plan(manifest_path, board, mode, info=None, from_layout=None):
     return profile, validated
 
 
+def table_entries(raw):
+    entries = {}
+    if len(raw) < 32 or len(raw) % 32:
+        raise ValueError("invalid legacy partition-table capture")
+    for at in range(0, len(raw), 32):
+        magic, kind, subtype, offset, size, label, _ = struct.unpack_from("<HBBII16sI", raw, at)
+        if magic != 0x50aa:
+            break
+        name = label.split(b"\0", 1)[0].decode("ascii")
+        if name in entries:
+            raise ValueError("duplicate legacy partition")
+        entries[name] = (kind, subtype, offset, size)
+    return entries
+
+
+def validate_legacy_table(raw, profile):
+    entries = table_entries(raw)
+    app_size = 0x640000 if profile["chipFamily"] == "ESP32-S3" else 0x140000
+    expected = {"nvs": (1, 2, 0x9000, 0x5000), "otadata": (1, 0, 0xe000, 0x2000),
+                "app0": (0, 0x10, 0x10000, app_size),
+                "app1": (0, 0x11, 0x10000 + app_size, app_size),
+                "aplo_cfg": (1, 2, profile["storage"]["offset"], profile["storage"]["size"])}
+    if any(entries.get(name) != value for name, value in expected.items()):
+        raise ValueError("physical partition table is not the declared same-offset legacy map")
+
+
+def validate_factory_table(raw, profile):
+    expected = {"nvs": (1, 2, 0x9000, 0x5000),
+                "factory": (0, 0, 0x10000, profile["storage"]["offset"] - 0x10000),
+                "aplo_cfg": (1, 2, profile["storage"]["offset"], profile["storage"]["size"])}
+    if table_entries(raw) != expected:
+        raise ValueError("physical partition table differs from the target factory map; migration required")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
@@ -110,6 +146,14 @@ def main():
             detected = re.search(r"Detected flash size:\s*(\d+)(KB|MB)", probe.stdout)
             if not detected or int(detected[1]) * (1024 if detected[2] == "KB" else 1024 * 1024) < profile["flashBytes"]:
                 raise ValueError("physical flash probe failed or board is smaller than selected profile")
+            if args.mode == "migrate" or args.mode == "update" and profile["chipFamily"] != "ESP8266":
+                with tempfile.TemporaryDirectory(prefix="firmwareembed-map-") as temporary:
+                    table = Path(temporary) / "partitions.bin"
+                    subprocess.run(base + ["read_flash", "0x8000", "0x1000", str(table)], check=True)
+                    if args.mode == "migrate":
+                        validate_legacy_table(table.read_bytes(), profile)
+                    else:
+                        validate_factory_table(table.read_bytes(), profile)
             subprocess.run(command, check=True)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(2, f"flash rejected: {error}\n")
